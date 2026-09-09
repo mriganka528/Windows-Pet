@@ -1,0 +1,20 @@
+// ---------------------------------------------------------------------------
+// Tray icon (embedded, no asset files).
+// ---------------------------------------------------------------------------
+// A warm-orange paw print, 32x32 PNG (8-bit RGBA), base64-inlined as a data URL.
+// Kept in code (rather than a file on disk) so the packaged app needs no extra
+// asset wiring and the icon can't go missing at runtime. Loaded via
+// nativeImage.createFromDataURL in index.ts; on Windows the tray scales this to
+// ~16-24px depending on DPI. The paw art fills the full 32x32 canvas (no margin)
+// so it appears as large as the OS tray slot allows — Windows controls the slot
+// size, so an app can't make the icon bigger than that; filling the canvas is
+// the lever we have. A dark-brown rim keeps it readable on light and dark bars.
+//
+// NOTE: this PNG is validated — it decodes and re-opens cleanly. (An earlier
+// build shipped a corrupt data URL here whose pixel stream was truncated;
+// createFromDataURL then returned an EMPTY image and the tray showed a blank
+// slot. If you ever regenerate this, verify the bytes actually decode to a real
+// image, e.g. re-open it with an image library, before pasting them in.)
+
+export const TRAY_ICON_DATA_URL =
+  'data:image/png;base64,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'

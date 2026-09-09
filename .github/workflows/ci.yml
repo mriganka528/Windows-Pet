@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  build-check:
+    # Windows runner: this is a Windows-only app and the Electron/native bits
+    # behave closest to production here.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Prettier check
+        run: npm run format:check
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      # E2E is opt-in in CI for now: it needs a display. windows-latest runners
+      # do provide one, but keep it non-blocking until Phase 1 stabilizes.
+      - name: E2E smoke (non-blocking)
+        run: npm run test:e2e
+        continue-on-error: true

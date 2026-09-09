@@ -1,0 +1,98 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Nudge — Native Notification Watcher
+    ===================================
+    A small standalone C#/.NET 8 console app that uses Windows UI Automation
+    (UIA) to notice when a toast notification appears, and prints its geometry +
+    metadata as newline-delimited JSON. Phase 5 wires it into Electron over a
+    named pipe; Phase 6 adds a reverse command on that same pipe so the app can
+    ask it to dismiss a specific toast (it invokes the toast's own close button
+    via UIA — no synthetic mouse input).
+
+    Why a separate C# process at all? There is no mature, maintained Node binding
+    for Windows UI Automation — the COM interop is painful outside .NET/C++. A tiny
+    dedicated helper is the standard pattern (VS Code, Discord et al. ship native
+    helpers for exactly this). See Documentation/TECH_STACK.md.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+
+    <!-- net8.0-windows10.0.19041.0: we call Windows-only APIs. The Windows 10
+         version suffix (not the plain net8.0-windows) is REQUIRED to light up the
+         Windows Runtime (WinRT) projections — specifically
+         Windows.UI.Notifications.Management.UserNotificationListener, the ONLY
+         supported way to observe/dismiss Windows 11 toasts (they are invisible to
+         UI Automation and Win32 window enumeration — see NotificationListenerDetector.cs).
+         The .NET SDK ships these projections, so no extra NuGet package is needed.
+         This project only builds/runs on Windows. -->
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+
+    <!-- Minimum OS we promise to run on. UserNotificationListener exists since
+         Windows 10 1607; 1809 is a safe floor and silences "API not available on
+         the minimum target" analyzer warnings. Must be <= the TFM version above. -->
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+
+    <!-- Roll forward across MAJOR runtime versions. We target net8.0 as a portable
+         floor, but a machine may only have a NEWER shared runtime installed — e.g.
+         installing the .NET 10 SDK gives you the 10.x Windows Desktop runtime, not
+         the 8.x one. This framework-dependent app would otherwise refuse to launch
+         ("You must install the .NET Desktop Runtime 8.0"). RollForward=Major lets
+         the app host run our net8.0 build on the 10.x (or any higher) runtime, so
+         it works whether the user has the 8, 9, or 10 desktop runtime. Building
+         still produces NudgeWatcher.exe under bin/…/net8.0-windows10.0.19041.0/,
+         which is exactly where the supervisor (notificationWatcher.ts → resolveExe)
+         looks. -->
+    <RollForward>Major</RollForward>
+
+    <!-- The managed UI Automation *client* assemblies (UIAutomationClient +
+         UIAutomationTypes, i.e. the System.Windows.Automation namespace) ship as
+         part of the Windows Desktop framework and are surfaced by UseWPF. We
+         don't render any WPF UI — this just makes those assemblies referenceable.
+         (Alternative: explicit <Reference Include="UIAutomationClient/Types"/>,
+         but UseWPF is the documented, reliably-resolving switch.) -->
+    <UseWPF>true</UseWPF>
+
+    <!-- UseWPF would otherwise flip an Exe into a windowed (WinExe) subsystem app
+         with no console. We want a real console so stdout works for the JSON
+         protocol; this keeps the console subsystem. -->
+    <DisableWinExeOutputInference>true</DisableWinExeOutputInference>
+
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>NudgeWatcher</RootNamespace>
+    <AssemblyName>NudgeWatcher</AssemblyName>
+
+    <!-- Nullable is ON above for hygiene, but NOT treated as errors: the UIA
+         interop surface is null-fuzzy and this can't be compiled in the dev
+         sandbox, so we don't want a stray nullable warning to block the build. -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+
+    <!-- Declares Per-Monitor-V2 DPI awareness + asInvoker (no elevation). DPI
+         awareness matters: it makes UIA BoundingRectangle report real physical
+         screen pixels on scaled displays, so the bounds we print are correct
+         (Phase 4 exit criterion) and line up with what the Electron overlay will
+         use (Phase 5). No admin rights are requested — UIA reads/clicks on
+         foreground UI need only standard user privileges (ARCHITECTURE.md §7). -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+
+    <Description>Nudge — Windows toast-notification watcher: UIA detection + named-pipe streaming (Phase 5) + reverse close command (Phase 6).</Description>
+    <Company>Nudge</Company>
+    <Product>Nudge Notification Watcher</Product>
+    <AssemblyVersion>0.9.0.0</AssemblyVersion>
+    <FileVersion>0.9.0.0</FileVersion>
+  </PropertyGroup>
+
+  <!--
+    Phase 7 (packaging) will publish this self-contained and single-file so users
+    never install a .NET runtime: publish for the win-x64 runtime identifier with
+    the self-contained option and single-file enabled (plus
+    IncludeNativeLibrariesForSelfExtract). See Documentation/TECH_STACK.md for the
+    exact command — it is kept OUT of the csproj (and written in prose here rather
+    than as a literal command, since an XML comment may not contain a double
+    hyphen) so day-to-day `dotnet run` stays fast.
+  -->
+
+</Project>

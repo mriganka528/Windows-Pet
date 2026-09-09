@@ -1,0 +1,56 @@
+/* The overlay must be fully transparent — no background anywhere in the chain.
+   If any of html/body/#root paints a color, the window looks opaque and we
+   lose the see-through effect that Phase 0 is all about. */
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  /* No user text selection / drag-image on the overlay. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* The stage fills the window but is itself invisible + non-interactive; only
+   the sprite inside it is a real target. */
+.stage {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* The moving sprite container. Positioned via `transform: translate(x, y)`
+   (compositor-friendly, avoids layout on every frame). Width/height are set
+   inline from the live size setting (small/medium/large), so no fixed size
+   here. The canvas inside is the only interactive region — but note the
+   overlay's click-through is actually governed by the main process via
+   setIgnoreMouseEvents, driven from App.tsx; pointer-events here is a secondary
+   guard. Real sprite sheets arrive Phase 3. */
+.sprite-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  will-change: transform;
+  cursor: grab;
+}
+
+.sprite-container:active {
+  cursor: grabbing;
+}
+
+/* Debug hint chip so it's obvious which build is running. Removed after Phase 0. */
+.debug-badge {
+  position: fixed;
+  left: 8px;
+  bottom: 8px;
+  padding: 4px 8px;
+  font: 12px/1.2 system-ui, sans-serif;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 6px;
+  pointer-events: none;
+}
