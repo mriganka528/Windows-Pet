@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="paper" x2="0" y2="1"><stop stop-color="#fffaf1"/><stop offset="1" stop-color="#eddbbf"/></linearGradient>
+    <radialGradient id="paw" cx=".35" cy=".25" r=".8"><stop stop-color="#f3bf77"/><stop offset=".55" stop-color="#dc974d"/><stop offset="1" stop-color="#aa602e"/></radialGradient>
+  </defs>
+  <rect x="7" y="7" width="242" height="242" rx="54" fill="url(#paper)" stroke="#dcc29e" stroke-width="2"/>
+  <g fill="url(#paw)" stroke="#a76a38" stroke-width="1.4">
+    <ellipse cx="66" cy="103" rx="18" ry="25" transform="rotate(-28 66 103)"/>
+    <ellipse cx="103" cy="77" rx="19" ry="26" transform="rotate(-10 103 77)"/>
+    <ellipse cx="147" cy="77" rx="19" ry="26" transform="rotate(10 147 77)"/>
+    <ellipse cx="185" cy="103" rx="18" ry="25" transform="rotate(28 185 103)"/>
+    <path d="M68 173C67 156 84 144 94 131C108 112 139 112 154 131C166 146 184 159 182 176C180 195 166 204 149 197C134 191 119 191 104 197C87 204 69 194 68 173Z"/>
+  </g>
+</svg>

@@ -81,7 +81,11 @@ export class NotificationWatcher {
     if (this.disposed) return
     const exe = this.resolveExe()
     if (!exe) {
-      this.setAvailable(false, 'watcher executable not found — notifications disabled (wander-only)', true)
+      this.setAvailable(
+        false,
+        'watcher executable not found — notifications disabled (wander-only)',
+        true
+      )
       return
     }
     this.spawn(exe)
@@ -173,7 +177,9 @@ export class NotificationWatcher {
 
     let child: ChildProcess
     try {
-      child = spawn(exe, args, { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true })
+      // stdin is a lifetime signal: EOF stops the helper if an installer or a
+      // crash terminates Electron before its normal shutdown handlers run.
+      child = spawn(exe, args, { stdio: ['pipe', 'ignore', 'pipe'], windowsHide: true })
     } catch (err) {
       this.log(`spawn failed: ${(err as Error).message}`)
       this.scheduleRestart()
@@ -262,7 +268,9 @@ export class NotificationWatcher {
     }
 
     const delay = Math.min(BASE_DELAY_MS * 2 ** (this.failures - 1), MAX_DELAY_MS)
-    this.log(`restarting watcher in ${delay}ms (attempt ${this.failures}/${MAX_CONSECUTIVE_FAILURES})`)
+    this.log(
+      `restarting watcher in ${delay}ms (attempt ${this.failures}/${MAX_CONSECUTIVE_FAILURES})`
+    )
     this.restartTimer = setTimeout(() => this.spawn(exe), delay)
   }
 

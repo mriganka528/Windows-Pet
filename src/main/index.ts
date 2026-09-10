@@ -1,22 +1,16 @@
 import {
   app,
   BrowserWindow,
-  desktopCapturer,
   globalShortcut,
   ipcMain,
   Menu,
   nativeImage,
   screen,
-  session,
   Tray
 } from 'electron'
 import { join } from 'node:path'
-import {
-  getSettings,
-  initSettings,
-  resetSettings,
-  updateSettings
-} from './settingsStore'
+import { existsSync } from 'node:fs'
+import { getSettings, initSettings, resetSettings, updateSettings } from './settingsStore'
 import { TRAY_ICON_DATA_URL } from './trayIcon'
 import {
   NotificationWatcher,
@@ -24,6 +18,7 @@ import {
   type WatcherClosed
 } from './notificationWatcher'
 import { WebcamWatcher } from './webcamWatcher'
+import { SystemAudioMonitor } from './systemAudio'
 import { screenRectToLocalRect } from '../shared/coords'
 import { MOOD_ORDER, MOOD_LABELS } from '../shared/settings'
 import type { NudgeSettings, SettingsPatch, MoodDefault } from '../shared/settings'
@@ -59,6 +54,8 @@ let notificationStatus: 'starting' | 'available' | 'unavailable' = 'starting'
 // reactToWebcam setting is off or Nudge is paused (see syncWebcamWatcher). It
 // reads only a boolean out of the registry — never any camera frames.
 let webcamWatcher: WebcamWatcher | null = null
+let audioMonitor: SystemAudioMonitor | null = null
+let audioRequested = false
 
 // [WIN/electron-vite] In dev, electron-vite serves the renderer from a dev
 // server and exposes its URL via the ELECTRON_RENDERER_URL env var. In a
@@ -66,6 +63,32 @@ let webcamWatcher: WebcamWatcher | null = null
 // disk. (Note: MAIN_WINDOW_VITE_DEV_SERVER_URL is an electron-FORGE convention
 // and does NOT exist here — referencing it would throw at runtime.)
 const RENDERER_DEV_URL = process.env['ELECTRON_RENDERER_URL']
+
+function overlayGeometry(): {
+  width: number
+  height: number
+  workArea: { x: number; y: number; width: number; height: number }
+} {
+  const display = screen.getPrimaryDisplay()
+  const origin = overlayWindow?.getBounds() ?? display.bounds
+  return {
+    width: origin.width,
+    height: origin.height,
+    workArea: {
+      ...display.workArea,
+      x: display.workArea.x - origin.x,
+      y: display.workArea.y - origin.y
+    }
+  }
+}
+
+function syncOverlayDisplay(): void {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return
+  overlayWindow.setBounds(screen.getPrimaryDisplay().bounds)
+  overlayWindow.webContents.send('overlay:geometry-changed', overlayGeometry())
+}
+
+ipcMain.handle('overlay:get-geometry', () => overlayGeometry())
 
 function createOverlayWindow(): void {
   // Size the overlay to the primary display's full work-area-inclusive bounds.
@@ -146,7 +169,10 @@ function createOverlayWindow(): void {
 
   overlayWindow.on('closed', () => {
     overlayWindow = null
+    stopAudioMonitor()
   })
+  overlayWindow.webContents.on('render-process-gone', stopAudioMonitor)
+  overlayWindow.webContents.on('did-start-loading', stopAudioMonitor)
 }
 
 // ---------------------------------------------------------------------------
@@ -224,6 +250,7 @@ function applySettingsSideEffects(settings: NudgeSettings): void {
   refreshTrayMenu()
   // Start/stop the webcam watcher to match the current preference + pause state.
   syncWebcamWatcher(settings)
+  syncAudioMonitor(settings)
 }
 
 // Feature 3: run the webcam watcher only when the user wants the reaction AND
@@ -358,8 +385,9 @@ ipcMain.handle('settings:reset', () => {
 // When ignore === true  -> overlay is click-through (cursor is NOT on sprite).
 // When ignore === false -> overlay captures the mouse (cursor IS on sprite),
 // so drag/pet interactions work.
-ipcMain.on('overlay:set-mouse-ignore', (_event, ignore: boolean) => {
-  if (!overlayWindow) return
+ipcMain.on('overlay:set-mouse-ignore', (event, ignore: boolean) => {
+  if (!overlayWindow || event.sender !== overlayWindow.webContents || typeof ignore !== 'boolean')
+    return
   if (ignore) {
     overlayWindow.setIgnoreMouseEvents(true, { forward: true })
   } else {
@@ -532,42 +560,69 @@ function startNotificationWatcher(): void {
 }
 
 // ---------------------------------------------------------------------------
-// System-audio loopback for the sound-sensitive dance (Feature 2)
+// Read-only Windows audio metering. It never opens a capture/sharing session.
 // ---------------------------------------------------------------------------
-// The overlay renderer detects music by tapping the PC's audio OUTPUT. It does
-// that via navigator.mediaDevices.getDisplayMedia({video,audio}); this handler
-// answers that request WITHOUT popping the OS screen-picker by handing back the
-// primary screen source plus 'loopback' (system) audio. [WIN] 'loopback' audio
-// is a Windows/Chromium capability — exactly our target.
-//
-// Chromium requires a video track to be part of a getDisplayMedia grant, so we
-// include the screen source; the renderer stops that video track the instant the
-// stream arrives and analyzes ONLY the audio (see useSystemAudio.ts). No audio
-// is recorded or forwarded — it's reduced to a beat/energy number in-process and
-// discarded (mirrors the watcher's "geometry only" privacy rule, ARCHITECTURE §7).
-//
-// If anything fails (no screen source, permission refused), we deny with an empty
-// grant; the renderer treats that as "no loopback" and simply never dances.
-function registerDisplayMediaHandler(): void {
-  session.defaultSession.setDisplayMediaRequestHandler(
-    (_request, callback) => {
-      desktopCapturer
-        .getSources({ types: ['screen'] })
-        .then((sources) => {
-          const screenSource = sources[0]
-          if (!screenSource) {
-            callback({}) // no source to grant -> deny (renderer degrades to no-op)
-            return
-          }
-          callback({ video: screenSource, audio: 'loopback' })
-        })
-        .catch(() => callback({}))
-    },
-    // We supply the source ourselves, so never fall back to the OS picker — the
-    // capture must be silent and automatic for the always-on companion.
-    { useSystemPicker: false }
-  )
+function resolveAudioHelper(): string | null {
+  const override = process.env['NUDGE_WATCHER_EXE']
+  if (override && existsSync(override)) return override
+  if (app.isPackaged) {
+    const exe = join(process.resourcesPath, 'watcher', 'NudgeWatcher.exe')
+    return existsSync(exe) ? exe : null
+  }
+  const root = app.getAppPath()
+  for (const configuration of ['Debug', 'Release']) {
+    const exe = join(
+      root,
+      'native',
+      'NudgeWatcher',
+      'bin',
+      configuration,
+      'net8.0-windows10.0.19041.0',
+      'NudgeWatcher.exe'
+    )
+    if (existsSync(exe)) return exe
+  }
+  return null
 }
+
+function stopAudioMonitor(): void {
+  audioRequested = false
+  audioMonitor?.dispose()
+  audioMonitor = null
+}
+
+function syncAudioMonitor(settings: NudgeSettings): void {
+  if (!audioRequested || !settings.general.reactToAudio || settings.runtime.paused) {
+    audioMonitor?.dispose()
+    audioMonitor = null
+    return
+  }
+  if (audioMonitor || process.platform !== 'win32') return
+  audioMonitor = new SystemAudioMonitor({
+    resolveExecutable: resolveAudioHelper,
+    onLevel: (sample) => {
+      const win = overlayWindow
+      if (
+        win &&
+        !win.isDestroyed() &&
+        audioRequested &&
+        getSettings().general.reactToAudio &&
+        !getSettings().runtime.paused
+      ) {
+        win.webContents.send('audio:level', sample)
+      }
+    },
+    log: (message) => console.log('[audio-meter] ' + message)
+  })
+  audioMonitor.start()
+}
+
+ipcMain.on('audio:set-monitoring', (event, enabled: unknown) => {
+  if (!overlayWindow || event.sender !== overlayWindow.webContents || typeof enabled !== 'boolean')
+    return
+  audioRequested = enabled
+  syncAudioMonitor(getSettings())
+})
 
 // ---------------------------------------------------------------------------
 // App lifecycle
@@ -586,16 +641,18 @@ if (!gotLock) {
   })
 
   app.whenReady().then(() => {
+    if (process.platform === 'win32') app.setAppUserModelId('com.nudge.desktop')
     // Load persisted settings BEFORE any window/tray so the overlay can read
     // them on first paint and the tray menu reflects the real state.
     const settings = initSettings()
     createOverlayWindow()
+    screen.on('display-metrics-changed', syncOverlayDisplay)
+    screen.on('display-added', syncOverlayDisplay)
+    screen.on('display-removed', syncOverlayDisplay)
     createTray()
     // Apply startup side effects (login item) and paint the initial tray menu.
     applySettingsSideEffects(settings)
     registerDevShortcuts()
-    // Answer the overlay's loopback-audio request for the music-dance detector.
-    registerDisplayMediaHandler()
     // Start watching for real toasts (Phase 5). Safe if the watcher is absent —
     // it just reports "unavailable" and the companion stays wander-only.
     startNotificationWatcher()
@@ -615,6 +672,7 @@ if (!gotLock) {
     notificationWatcher = null
     webcamWatcher?.dispose()
     webcamWatcher = null
+    stopAudioMonitor()
     tray?.destroy()
     tray = null
   })

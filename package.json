@@ -1,6 +1,6 @@
 {
   "name": "nudge",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "A customizable cartoon animal desktop companion for Windows that roams the screen and reacts to notifications.",
   "author": "",
   "license": "UNLICENSED",
@@ -14,6 +14,9 @@
     "start": "electron-vite preview",
     "watcher:build": "dotnet build native/NudgeWatcher/NudgeWatcher.csproj -c Debug",
     "watcher:build:release": "dotnet build native/NudgeWatcher/NudgeWatcher.csproj -c Release",
+    "watcher:publish": "node scripts/publish-watcher.mjs",
+    "dist:win": "npm run build && npm run watcher:publish && npx --yes --package=electron-builder@26.0.12 electron-builder --win nsis --x64 --publish never",
+    "pack:win": "npm run build && npm run watcher:publish && npx --yes --package=electron-builder@26.0.12 electron-builder --win --x64 --dir --publish never",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",

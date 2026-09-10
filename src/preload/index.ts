@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { NudgeSettings, SettingsPatch } from '../shared/settings'
+import type { AudioLevel } from '../shared/audio'
 
 // ---------------------------------------------------------------------------
 // Preload — the ONLY bridge between the sandboxed renderer and the main process.
@@ -40,7 +41,31 @@ export interface WebcamChangedPayload {
   inUse: boolean
 }
 
+export interface OverlayGeometry {
+  width: number
+  height: number
+  workArea: { x: number; y: number; width: number; height: number }
+}
+
 const api = {
+  setAudioMonitoring(enabled: boolean): void {
+    ipcRenderer.send('audio:set-monitoring', enabled)
+  },
+  onAudioLevel(callback: (sample: AudioLevel) => void): () => void {
+    const listener = (_event: Electron.IpcRendererEvent, sample: AudioLevel): void =>
+      callback(sample)
+    ipcRenderer.on('audio:level', listener)
+    return () => ipcRenderer.removeListener('audio:level', listener)
+  },
+  getGeometry(): Promise<OverlayGeometry> {
+    return ipcRenderer.invoke('overlay:get-geometry')
+  },
+  onGeometryChanged(callback: (geometry: OverlayGeometry) => void): () => void {
+    const listener = (_event: Electron.IpcRendererEvent, geometry: OverlayGeometry): void =>
+      callback(geometry)
+    ipcRenderer.on('overlay:geometry-changed', listener)
+    return () => ipcRenderer.removeListener('overlay:geometry-changed', listener)
+  },
   /**
    * Tell the overlay whether to ignore mouse events (click-through).
    * @param ignore true  = pass clicks through to apps below (cursor off sprite)
@@ -55,8 +80,7 @@ const api = {
    * making the pup angry). Returns an unsubscribe function.
    */
   onCompanionEvent(callback: (event: CompanionEvent) => void): () => void {
-    const listener = (_e: Electron.IpcRendererEvent, event: CompanionEvent): void =>
-      callback(event)
+    const listener = (_e: Electron.IpcRendererEvent, event: CompanionEvent): void => callback(event)
     ipcRenderer.on('companion:event', listener)
     return () => ipcRenderer.removeListener('companion:event', listener)
   },

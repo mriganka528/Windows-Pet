@@ -1,0 +1,45 @@
+appId: com.nudge.desktop
+productName: Nudge
+asar: true
+npmRebuild: false
+electronDist: node_modules/electron/dist
+
+directories:
+  output: dist
+  buildResources: build
+
+files:
+  - out/main/**/*
+  - out/preload/**/*
+  - out/renderer/**/*
+  - package.json
+
+# The helper must be outside app.asar so Windows can execute it.
+# Its self-contained publish includes the .NET runtime and Windows projections.
+extraResources:
+  - from: out/watcher/win-x64
+    to: watcher
+    filter:
+      - '**/*'
+      - '!**/*.pdb'
+
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: Nudge-Setup-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: true
+  perMachine: false
+  allowElevation: false
+  runAfterFinish: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Nudge
+  deleteAppDataOnUninstall: false
+
+# Building an installer never uploads or publishes a release.
+publish: null

@@ -1,0 +1,41 @@
+name: Build Windows installer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - run: npm ci
+      - run: npm test
+      - run: npm run dist:win
+      - name: Checksum the installer
+        shell: pwsh
+        run: |
+          Get-ChildItem -LiteralPath dist -Filter 'Nudge-Setup-*.exe' |
+            Get-FileHash -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash)  $([IO.Path]::GetFileName($_.Path))" } |
+            Set-Content -LiteralPath dist/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Nudge-Windows-x64-installer
+          path: |
+            dist/Nudge-Setup-*.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14

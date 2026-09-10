@@ -36,6 +36,13 @@ body,
   left: 0;
   will-change: transform;
   cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.sprite-container[data-state='sleeping'],
+.sprite-container[data-state='sleepTravel'] {
+  cursor: pointer;
 }
 
 .sprite-container:active {
@@ -48,7 +55,9 @@ body,
   left: 8px;
   bottom: 8px;
   padding: 4px 8px;
-  font: 12px/1.2 system-ui, sans-serif;
+  font:
+    12px/1.2 system-ui,
+    sans-serif;
   color: #fff;
   background: rgba(0, 0, 0, 0.45);
   border-radius: 6px;

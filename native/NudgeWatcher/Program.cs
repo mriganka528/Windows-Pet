@@ -43,6 +43,8 @@ internal static class Program
     [MTAThread]
     static int Main(string[] args)
     {
+        // Separate mode: never starts notification detection or requests access.
+        if (args.Length == 1 && args[0] == "--audio-meter") return AudioMeter.Run();
         CliOptions opts = CliOptions.Parse(args);
         if (opts.ShowHelp)
         {
@@ -112,6 +114,22 @@ internal static class Program
         // --- live watch mode ----------------------------------------------------
         using var stop = new ManualResetEventSlim(false);
 
+        // An installer may terminate the desktop app during an update. Stop
+        // when its inherited stdin pipe closes so the helper cannot outlive it
+        // or keep installed files locked. Interactive/manual runs are unchanged.
+        if (pipe is not null && Console.IsInputRedirected)
+        {
+            _ = Task.Run(() =>
+            {
+                try { while (Console.ReadLine() is not null) { } }
+                catch (System.IO.IOException) { }
+                finally
+                {
+                    try { stop.Set(); } catch (ObjectDisposedException) { }
+                }
+            });
+        }
+
         // Ctrl+C: unwind cleanly instead of hard-killing, so we can remove UIA
         // handlers (leaking them can destabilize the UIA service).
         Console.CancelKeyPress += (_, e) =>
@@ -172,6 +190,9 @@ MODES
                    toast appears or is dismissed. Runs until Ctrl+C.
   --scan           List the toast notifications present right now once (app name
                    + id only), then exit. Quick check that access is granted.
+  --audio-meter    Read the default playback device's peak level at 50 Hz.
+                   No screen/audio capture. Send "stop" on stdin (or close stdin)
+                   to stop. Emits {"type":"audio-level","level":0..1,"available":true|false}.
 
 OPTIONS
   -v, --verbose    Verbose diagnostics on stderr.

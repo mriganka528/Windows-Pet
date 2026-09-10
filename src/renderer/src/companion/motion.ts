@@ -9,6 +9,8 @@
 // y down. The "ground line" is the y where the sprite's ANCHOR (bottom-center)
 // rests when walking along the taskbar edge.
 
+import type { SleepPosition } from '../../../shared/settings'
+
 export interface Vec2 {
   x: number
   y: number
@@ -17,6 +19,8 @@ export interface Vec2 {
 export interface Bounds {
   width: number
   height: number
+  /** Usable desktop in overlay coordinates, excluding the taskbar. */
+  workArea?: Rect
 }
 
 /** A rectangle in overlay-window-local CSS px (e.g. a notification's location).
@@ -38,21 +42,21 @@ export interface WanderConfig {
   speed: number
   /** Fraction of the time the dog rests vs. walks (0..1). */
   restBias: number
-  /**
-   * Chance per target-pick that the next target is ANYWHERE on the overlay (a
-   * free roam across the whole screen — any x, any y) rather than back down on
-   * the ground line. Higher → the pet wanders all over the screen; lower → it
-   * hugs the taskbar edge and only occasionally drifts up. (0..1)
-   */
+  /** Chance of a full-desktop excursion rather than a shorter local stroll. */
   roamChance: number
+  /** User control applies to normal walks, independently of urgent trips. */
+  wanderSpeedMultiplier?: number
+  sleepPosition?: SleepPosition
 }
 
 export const DEFAULT_WANDER: WanderConfig = {
   spriteSize: 80,
   speed: 90,
   restBias: 0.35,
-  // Mostly roam the whole screen; sometimes settle back on the ground line.
-  roamChance: 0.75
+  // A moderate exploration range for short, deliberate walks.
+  roamChance: 0.75,
+  wanderSpeedMultiplier: 1,
+  sleepPosition: 'top-left'
 }
 
 /**
@@ -65,7 +69,8 @@ export const DEFAULT_WANDER: WanderConfig = {
  * never teleports past the toast between frames (`stepToward` also snaps to the
  * target on the final tick rather than overshooting).
  */
-export const TRAVEL_SPEED_SCALE = 4.5
+export const TRAVEL_SPEED_SCALE = 4.8
+export const SLEEP_SPEED_SCALE = 4
 
 /**
  * The y-coordinate of the sprite's top-left when resting on the ground line
@@ -73,16 +78,36 @@ export const TRAVEL_SPEED_SCALE = 4.5
  * on-screen.
  */
 export function groundLineTop(bounds: Bounds, cfg: WanderConfig): number {
-  return Math.max(0, bounds.height - cfg.spriteSize)
+  const area = bounds.workArea
+  return Math.max(0, (area ? area.y + area.height : bounds.height) - cfg.spriteSize)
+}
+
+/** Park inside the chosen work-area corner, leaving room around the pet. */
+export function sleepTarget(bounds: Bounds, cfg: WanderConfig): Vec2 {
+  const area = bounds.workArea ?? { x: 0, y: 0, width: bounds.width, height: bounds.height }
+  const corner = cfg.sleepPosition ?? 'top-left'
+  return clampToBounds(
+    {
+      x: corner.endsWith('right') ? area.x + area.width - cfg.spriteSize - 12 : area.x + 12,
+      y: corner.startsWith('bottom') ? groundLineTop(bounds, cfg) - 12 : area.y + 12
+    },
+    bounds,
+    cfg
+  )
 }
 
 /** Clamp a sprite top-left position so the full body stays within bounds. */
 export function clampToBounds(pos: Vec2, bounds: Bounds, cfg: WanderConfig): Vec2 {
   const maxX = Math.max(0, bounds.width - cfg.spriteSize)
   const maxY = Math.max(0, bounds.height - cfg.spriteSize)
+  const area = bounds.workArea
+  const minX = Math.min(maxX, Math.max(0, area?.x ?? 0))
+  const minY = Math.min(maxY, Math.max(0, area?.y ?? 0))
+  const right = Math.max(minX, Math.min(maxX, area ? area.x + area.width - cfg.spriteSize : maxX))
+  const bottom = Math.max(minY, Math.min(maxY, area ? area.y + area.height - cfg.spriteSize : maxY))
   return {
-    x: Math.min(Math.max(0, pos.x), maxX),
-    y: Math.min(Math.max(0, pos.y), maxY)
+    x: Math.min(Math.max(minX, pos.x), right),
+    y: Math.min(Math.max(minY, pos.y), bottom)
   }
 }
 
@@ -98,19 +123,39 @@ export function facingFromDelta(dx: number, prev: Facing): Facing {
  * Returns a target the sprite should walk to (top-left coords). Passing an
  * explicit `rng` (default Math.random) keeps this testable.
  *
- * Most picks ROAM the whole overlay — a random x AND a random y anywhere on
- * screen — so the pet drifts all over instead of pacing the bottom edge; the
- * remainder settle back on the ground line so it still feels tethered to the
- * desktop now and then. `cfg.roamChance` sets that balance.
+ * Mix full-desktop excursions and local strolls, varying both axes. Supplying
+ * the current position also avoids picking an imperceptibly short destination.
  */
 export function pickWanderTarget(
   bounds: Bounds,
   cfg: WanderConfig,
-  rng: () => number = Math.random
+  rng: () => number = Math.random,
+  origin?: Vec2
 ): Vec2 {
   const maxX = Math.max(0, bounds.width - cfg.spriteSize)
   const maxY = Math.max(0, bounds.height - cfg.spriteSize)
   const x = Math.round(rng() * maxX)
+
+  if (origin) {
+    const far = rng() < cfg.roamChance
+    const angle = rng() * Math.PI * 2
+    const distance = cfg.spriteSize * (1.4 + rng() * 3.2)
+    let target = clampToBounds(
+      far
+        ? { x, y: rng() * maxY }
+        : { x: origin.x + Math.cos(angle) * distance, y: origin.y + Math.sin(angle) * distance },
+      bounds,
+      cfg
+    )
+    if (Math.hypot(target.x - origin.x, target.y - origin.y) < cfg.spriteSize * 0.7) {
+      target = clampToBounds(
+        { x: origin.x < maxX / 2 ? maxX : 0, y: origin.y < maxY / 2 ? maxY : 0 },
+        bounds,
+        cfg
+      )
+    }
+    return target
+  }
 
   // Free roam across the entire screen (any x, any y).
   if (rng() < cfg.roamChance) {
@@ -118,6 +163,31 @@ export function pickWanderTarget(
   }
   // Otherwise settle back down onto the ground line.
   return { x, y: groundLineTop(bounds, cfg) }
+}
+
+/** Acceleration and braking in px/s; independent of the animation frame rate. */
+export function easedStep(
+  pos: Vec2,
+  target: Vec2,
+  cfg: WanderConfig,
+  dt: number,
+  facing: Facing,
+  speed: number,
+  speedScale = 1
+): StepResult & { speed: number; distance: number } {
+  const elapsed = Number.isFinite(dt) ? Math.max(0, Math.min(0.1, dt)) : 0
+  const distance = Math.hypot(target.x - pos.x, target.y - pos.y)
+  const acceleration = Math.max(80, cfg.speed * speedScale * 3.5)
+  const desired = Math.min(cfg.speed * speedScale, Math.sqrt(2 * acceleration * distance))
+  const nextSpeed =
+    speed + Math.max(-acceleration * elapsed, Math.min(acceleration * elapsed, desired - speed))
+  if (elapsed === 0) return { pos, facing, arrived: distance < 0.5, speed, distance: 0 }
+  const result = stepToward(pos, target, { ...cfg, speed: nextSpeed }, elapsed, facing)
+  return {
+    ...result,
+    speed: result.arrived ? 0 : nextSpeed,
+    distance: Math.hypot(result.pos.x - pos.x, result.pos.y - pos.y)
+  }
 }
 
 export interface StepResult {
@@ -150,7 +220,11 @@ export function stepToward(
   const maxStep = cfg.speed * speedScale * dtSeconds
 
   if (dist <= maxStep || dist < 0.5) {
-    return { pos: { x: target.x, y: target.y }, arrived: true, facing: facingFromDelta(dx, prevFacing) }
+    return {
+      pos: { x: target.x, y: target.y },
+      arrived: true,
+      facing: facingFromDelta(dx, prevFacing)
+    }
   }
 
   const nx = pos.x + (dx / dist) * maxStep

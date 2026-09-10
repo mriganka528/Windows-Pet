@@ -28,11 +28,8 @@ describe('settings defaults', () => {
     expect(SIZE_PX.medium).toBeLessThan(SIZE_PX.large)
   })
 
-  it('does NOT dance by default — opt-in, so launching never trips Windows DND', () => {
-    // Capturing loopback audio for the dance needs a screen-capture session, which
-    // Windows treats as screen-sharing and uses to auto-enable Do Not Disturb. So
-    // the feature ships OFF and the user opts in from Settings.
-    expect(DEFAULT_SETTINGS.general.reactToAudio).toBe(false)
+  it('enables capture-free dancing by default', () => {
+    expect(DEFAULT_SETTINGS.general.reactToAudio).toBe(true)
   })
 
   it('defines a palette for every recolor coat (natural has none by design)', () => {

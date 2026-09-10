@@ -25,6 +25,7 @@ import {
 // costs nothing at rest.
 
 export interface EffectsHandle {
+  clear(kind: Particle['kind']): void
   hearts(x: number, y: number): void
   anger(x: number, y: number): void
   sleep(x: number, y: number): void
@@ -50,6 +51,10 @@ export const EffectsCanvas = forwardRef<EffectsHandle>(function EffectsCanvas(_p
   useImperativeHandle(
     ref,
     () => ({
+      clear(kind) {
+        particlesRef.current = particlesRef.current.filter((p) => p.kind !== kind)
+        ensureRunning()
+      },
       hearts(x, y) {
         particlesRef.current.push(...spawnHearts(x, y, 5))
         ensureRunning()
@@ -224,12 +229,7 @@ function drawNote(c: CanvasRenderingContext2D, size: number, id: number): void {
 // A four-point "glint" star for the photogenic pose. The arm length pulses with
 // age (`twinkle`) so a scatter of them shimmers like a camera flash, and a warm
 // white→gold radial fill keeps them reading as sparkles on any background.
-function drawSparkle(
-  c: CanvasRenderingContext2D,
-  size: number,
-  age: number,
-  phase: number
-): void {
+function drawSparkle(c: CanvasRenderingContext2D, size: number, age: number, phase: number): void {
   const twinkle = 0.72 + 0.28 * Math.sin(age * 14 + phase)
   const r = (size / 2) * twinkle
   const waist = r * 0.16 // arm thickness at the centre (smaller = thinner glints)

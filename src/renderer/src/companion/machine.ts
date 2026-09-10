@@ -49,11 +49,13 @@ import {
   facingFromDelta,
   groundLineTop,
   pickWanderTarget,
-  stepToward,
+  easedStep,
+  sleepTarget,
   notificationTarget,
   webcamTarget,
   DEFAULT_WANDER,
   TRAVEL_SPEED_SCALE,
+  SLEEP_SPEED_SCALE,
   type Bounds,
   type Facing,
   type Rect,
@@ -79,6 +81,14 @@ export interface CompanionContext {
   facing: Facing
   bounds: Bounds
   config: WanderConfig
+  speed: number
+  distanceTravelled: number
+  sleepRequested: boolean
+  wanderSpeedScale: number
+  frontRemaining: number
+  nextFrontIn: number
+  idleFront: boolean
+  celebrateRemaining: number
   /** Seconds remaining to rest while idle before picking a new target. */
   restRemaining: number
   /** Seconds remaining in the landing recover beat. */
@@ -116,6 +126,8 @@ export type CompanionEvent =
   | { type: 'MUSIC_STOP' }
   | { type: 'WEBCAM_ON' }
   | { type: 'WEBCAM_OFF' }
+  | { type: 'SLEEP' }
+  | { type: 'WAKE' }
 
 export interface CompanionInput {
   bounds: Bounds
@@ -128,7 +140,7 @@ const REST_MAX = 2.6
 const LANDING_TIME = 0.35
 // The "notice" beat: how long the pup reacts in place (perk up / "!") before it
 // trots over to the toast. Short so it feels responsive but readable.
-const ALERT_TIME = 0.45
+const ALERT_TIME = 0.25
 // Safety cap on the nudge hold. A toast normally closes within a few seconds and
 // we unwind on NOTIFICATION_CLOSED; this only fires if that event never arrives
 // (e.g. the toast lingers or the close was missed) so the pup can't get stuck.
@@ -149,6 +161,14 @@ function initialContext(input: CompanionInput): CompanionContext {
     facing: 'right',
     bounds,
     config,
+    speed: 0,
+    distanceTravelled: 0,
+    sleepRequested: false,
+    wanderSpeedScale: 1,
+    frontRemaining: 0,
+    nextFrontIn: 1.5 + Math.random() * 3,
+    idleFront: false,
+    celebrateRemaining: 0,
     restRemaining: REST_MIN,
     landRemaining: 0,
     notification: null,
@@ -170,21 +190,36 @@ export const companionMachine = setup({
   actions: {
     updateBounds: assign(({ context, event }) => {
       if (event.type !== 'SET_BOUNDS') return {}
+      const target = context.sleepRequested
+        ? sleepTarget(event.bounds, context.config)
+        : clampToBounds(context.target, event.bounds, context.config)
       return {
         bounds: event.bounds,
-        position: clampToBounds(context.position, event.bounds, context.config)
+        position: clampToBounds(context.position, event.bounds, context.config),
+        target
       }
     }),
-    // Live size / motion change from Settings. Additive (like updateBounds) so
-    // the tested idle/wander/drag flow is untouched. Snap to the (new) ground
-    // line and retarget in place so a resize can't leave a stale off-screen
-    // target or a mid-air body.
+    // Keep the feet at their current height when resizing. Mood and coat
+    // changes must never reset a position chosen by dragging.
     updateConfig: assign(({ context, event }) => {
       if (event.type !== 'SET_CONFIG') return {}
       const config = event.config
-      const grounded = { x: context.position.x, y: groundLineTop(context.bounds, config) }
-      const position = clampToBounds(grounded, context.bounds, config)
-      return { config, position, target: { ...position } }
+      const delta = context.config.spriteSize - config.spriteSize
+      const position = clampToBounds(
+        { x: context.position.x, y: context.position.y + delta },
+        context.bounds,
+        config
+      )
+      const target = context.sleepRequested
+        ? sleepTarget(context.bounds, config)
+        : context.notification
+          ? notificationTarget(context.notification.rect, context.bounds, config)
+          : clampToBounds(
+              { x: context.target.x, y: context.target.y + delta },
+              context.bounds,
+              config
+            )
+      return { config, position, target }
     }),
     // Advance the rest timer while idle.
     tickRest: assign(({ context, event }) => {
@@ -193,17 +228,55 @@ export const companionMachine = setup({
     }),
     // Pick a fresh wander target and reset facing toward it.
     chooseTarget: assign(({ context }) => {
-      const target = pickWanderTarget(context.bounds, context.config)
+      const target = pickWanderTarget(context.bounds, context.config, Math.random, context.position)
       return {
         target,
+        speed: 0,
+        wanderSpeedScale: 0.8 + Math.random() * 0.4,
         facing: facingFromDelta(target.x - context.position.x, context.facing)
       }
     }),
     // Move toward the target during wander.
     tickWander: assign(({ context, event }) => {
       if (event.type !== 'TICK') return {}
-      const r = stepToward(context.position, context.target, context.config, event.dt, context.facing)
-      return { position: r.pos, facing: r.facing }
+      const r = easedStep(
+        context.position,
+        context.target,
+        context.config,
+        event.dt,
+        context.facing,
+        context.speed,
+        context.wanderSpeedScale * (context.config.wanderSpeedMultiplier ?? 1)
+      )
+      const glance = context.nextFrontIn <= 0 && context.frontRemaining <= 0
+      return {
+        position: r.pos,
+        facing: r.facing,
+        speed: r.speed,
+        distanceTravelled: context.distanceTravelled + r.distance,
+        frontRemaining: glance
+          ? 1.2 + Math.random() * 0.6
+          : Math.max(0, context.frontRemaining - event.dt),
+        nextFrontIn: glance ? 4 + Math.random() * 5 : context.nextFrontIn - event.dt
+      }
+    }),
+    tickSleepTravel: assign(({ context, event }) => {
+      if (event.type !== 'TICK') return {}
+      const r = easedStep(
+        context.position,
+        context.target,
+        context.config,
+        event.dt,
+        context.facing,
+        context.speed,
+        SLEEP_SPEED_SCALE
+      )
+      return {
+        position: r.pos,
+        facing: r.facing,
+        speed: r.speed,
+        distanceTravelled: context.distanceTravelled + r.distance
+      }
     }),
     // Move toward the target during a notification dash — same stepper, but at
     // TRAVEL_SPEED_SCALE× so the pup visibly RUNS to the toast (the user's
@@ -211,15 +284,21 @@ export const companionMachine = setup({
     // on tickWander) so the wander path stays byte-for-byte the tested one.
     tickTravel: assign(({ context, event }) => {
       if (event.type !== 'TICK') return {}
-      const r = stepToward(
+      const r = easedStep(
         context.position,
         context.target,
         context.config,
         event.dt,
         context.facing,
+        context.speed,
         TRAVEL_SPEED_SCALE
       )
-      return { position: r.pos, facing: r.facing }
+      return {
+        position: r.pos,
+        facing: r.facing,
+        speed: r.speed,
+        distanceTravelled: context.distanceTravelled + r.distance
+      }
     }),
     // While dragging, position is dictated by the cursor.
     applyDrag: assign(({ context, event }) => {
@@ -245,8 +324,32 @@ export const companionMachine = setup({
         landRemaining: Math.max(0, context.landRemaining - event.dt)
       }
     }),
-    resetRest: assign(() => ({
-      restRemaining: REST_MIN + Math.random() * (REST_MAX - REST_MIN)
+    resetRest: assign(({ context }) => ({
+      speed: 0,
+      idleFront: Math.random() < 0.45,
+      restRemaining:
+        (REST_MIN + Math.random() * (REST_MAX - REST_MIN)) *
+          (0.7 + context.config.restBias * 0.85) +
+        Math.max(0, context.config.restBias - 0.35) * 8
+    })),
+    beginSleep: assign(({ context }) => ({
+      sleepRequested: true,
+      notification: null,
+      speed: 0,
+      target: sleepTarget(context.bounds, context.config)
+    })),
+    settleSleep: assign(({ context }) => ({
+      speed: 0,
+      facing: context.config.sleepPosition?.endsWith('right')
+        ? ('left' as const)
+        : ('right' as const)
+    })),
+    wake: assign(({ context }) => ({
+      sleepRequested: false,
+      speed: 0,
+      musicActive: false,
+      posedThisSession: context.webcamActive,
+      target: { ...context.position }
     })),
     // A toast appeared: remember it, aim at its close (X) button, face that way,
     // and start the brief "notice" beat. Coordinate conversion (screen px ->
@@ -256,6 +359,7 @@ export const companionMachine = setup({
       const target = notificationTarget(event.rect, context.bounds, context.config)
       return {
         notification: { id: event.id, rect: event.rect, interactive: event.interactive },
+        speed: 0,
         target,
         facing: facingFromDelta(target.x - context.position.x, context.facing),
         alertRemaining: ALERT_TIME
@@ -278,6 +382,12 @@ export const companionMachine = setup({
     }),
     // Forget the current toast (on close, timeout, or pick-up).
     clearNotification: assign(() => ({ notification: null })),
+    beginCelebrate: assign(() => ({ notification: null, celebrateRemaining: 1.3, speed: 0 })),
+    tickCelebrate: assign(({ context, event }) =>
+      event.type === 'TICK'
+        ? { celebrateRemaining: Math.max(0, context.celebrateRemaining - event.dt) }
+        : {}
+    ),
     // Music on/off flag (from the renderer's audio detector edges). Entering the
     // dance itself is left to the guarded TICK in idle/wander, so this only ever
     // sets a flag — never forces a state change out of a drag/notification flow.
@@ -314,7 +424,7 @@ export const companionMachine = setup({
     arrived: ({ context }) => {
       const dx = context.target.x - context.position.x
       const dy = context.target.y - context.position.y
-      return Math.hypot(dx, dy) < 0.5
+      return Math.hypot(dx, dy) < 0.001
     },
     landingDone: ({ context }) => context.landRemaining <= 0,
     alertDone: ({ context }) => context.alertRemaining <= 0,
@@ -330,7 +440,12 @@ export const companionMachine = setup({
     // is on AND we haven't already posed for it. posedThisSession latches after one
     // pose (reset on WEBCAM_OFF) so we don't loop the pose while the camera stays on.
     wantsPose: ({ context }) => context.webcamActive && !context.posedThisSession,
-    poseDone: ({ context }) => context.poseRemaining <= 0
+    poseDone: ({ context }) => context.poseRemaining <= 0,
+    celebrateDone: ({ context }) => context.celebrateRemaining <= 0,
+    bedChanges: ({ context, event }) =>
+      event.type === 'SET_CONFIG' &&
+      (context.config.spriteSize !== event.config.spriteSize ||
+        (context.config.sleepPosition ?? 'top-left') !== (event.config.sleepPosition ?? 'top-left'))
   }
 }).createMachine({
   id: 'companion',
@@ -340,7 +455,8 @@ export const companionMachine = setup({
   on: {
     SET_BOUNDS: { actions: 'updateBounds' },
     SET_CONFIG: { actions: 'updateConfig' },
-    PICK_UP: { target: '.dragging', actions: 'clearNotification' },
+    PICK_UP: { target: '.dragging', actions: ['clearNotification', 'wake'] },
+    SLEEP: { target: '.sleepTravel', actions: 'beginSleep' },
     NOTIFICATION_CLOSED: { guard: 'closingCurrent', target: '.idle', actions: 'clearNotification' },
     // Music on/off just flip the flag from any state; the actual hop into/out of
     // `dance` is handled by the guarded TICK in idle/wander/dance, so we never
@@ -356,6 +472,30 @@ export const companionMachine = setup({
   },
   initial: 'idle',
   states: {
+    sleepTravel: {
+      on: {
+        TICK: [
+          { guard: 'arrived', target: 'sleeping', actions: 'settleSleep' },
+          { actions: 'tickSleepTravel' }
+        ],
+        SLEEP: {},
+        WAKE: { target: 'wander', actions: ['wake', 'chooseTarget'] },
+        NOTIFICATION_APPEARED: {}
+      }
+    },
+    sleeping: {
+      on: {
+        // Resizing the display or pet retargets its bed, without waking it.
+        SET_BOUNDS: { target: 'sleepTravel', actions: 'updateBounds' },
+        SET_CONFIG: [
+          { guard: 'bedChanges', target: 'sleepTravel', actions: 'updateConfig' },
+          { actions: 'updateConfig' }
+        ],
+        SLEEP: {},
+        WAKE: { target: 'wander', actions: ['wake', 'chooseTarget'] },
+        NOTIFICATION_APPEARED: {}
+      }
+    },
     idle: {
       entry: 'resetRest',
       on: {
@@ -391,19 +531,13 @@ export const companionMachine = setup({
     },
     landing: {
       on: {
-        TICK: [
-          { guard: 'landingDone', target: 'idle' },
-          { actions: 'tickLanding' }
-        ]
+        TICK: [{ guard: 'landingDone', target: 'idle' }, { actions: 'tickLanding' }]
       }
     },
     // A toast appeared: react in place for a beat, then trot over.
     alert: {
       on: {
-        TICK: [
-          { guard: 'alertDone', target: 'travel' },
-          { actions: 'tickAlert' }
-        ]
+        TICK: [{ guard: 'alertDone', target: 'travel' }, { actions: 'tickAlert' }]
       }
     },
     // Walk to the spot beside the toast. Uses the FAST stepper (tickTravel) so
@@ -421,10 +555,24 @@ export const companionMachine = setup({
     // or the safety timeout elapses.
     interact: {
       on: {
+        NOTIFICATION_CLOSED: {
+          guard: 'closingCurrent',
+          target: 'celebrate',
+          actions: 'beginCelebrate'
+        },
         TICK: [
           { guard: 'interactDone', target: 'idle', actions: 'clearNotification' },
           { actions: 'tickInteract' }
         ]
+      }
+    },
+    celebrate: {
+      on: {
+        TICK: [
+          { guard: 'celebrateDone', target: 'wander', actions: 'chooseTarget' },
+          { actions: 'tickCelebrate' }
+        ],
+        NOTIFICATION_APPEARED: { target: 'alert', actions: 'beginAlert' }
       }
     },
     // Music is playing: bop in place. The sprite drives the actual dance

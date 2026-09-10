@@ -2,9 +2,9 @@
 // Pure beat / "is music playing" detection for the sound-sensitive dance.
 // ---------------------------------------------------------------------------
 // No Web Audio, no DOM, no timers, no randomness — just numbers in, a new state
-// + flags out. The renderer's useSystemAudio hook samples the system-audio
-// AnalyserNode each animation frame, reduces it to a single scalar "energy",
-// and feeds it here with the frame's dt. Keeping the logic pure means we can
+// + flags out. The renderer's useSystemAudio hook receives Windows playback
+// meter levels, converts them to perceptual energy, and feeds them here with
+// the elapsed time. Keeping the logic pure means we can
 // unit-test the tricky parts (beat threshold, refractory window, music on/off
 // hysteresis) without an audio device — the sandbox has none, and neither does
 // CI.

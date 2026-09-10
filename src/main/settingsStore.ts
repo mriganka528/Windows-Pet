@@ -46,20 +46,13 @@ export function initSettings(): NudgeSettings {
   })
   current = mergeSettings(DEFAULT_SETTINGS, store.get('settings'))
 
-  // One-time migration ("audioOptIn"). "Dance to music" used to default ON, which
-  // meant launching Nudge immediately opened a loopback screen-capture session —
-  // and Windows treats any live screen capture as screen-sharing, silently turning
-  // ON Do Not Disturb / Focus. The feature is now opt-in (DEFAULT_SETTINGS has
-  // reactToAudio: false). Flip any PREVIOUSLY-persisted `true` to `false` exactly
-  // once so existing installs also stop auto-enabling DND at launch. The store
-  // flag guards it, so if the user deliberately re-enables the toggle afterwards
-  // we never stomp their choice on the next start.
+  // Older builds disabled dancing because their audio capture started screen
+  // sharing. Enable the new capture-free meter once, including existing installs.
+  // An explicit Off chosen after this upgrade remains Off on later launches.
   const migrations = store.get('migrations') ?? {}
-  if (!migrations.audioOptIn) {
-    if (current.general.reactToAudio) {
-      current = mergeSettings(current, { general: { reactToAudio: false } })
-    }
-    store.set('migrations', { ...migrations, audioOptIn: true })
+  if (!migrations.audioMeterDefault) {
+    current = mergeSettings(current, { general: { reactToAudio: true } })
+    store.set('migrations', { ...migrations, audioMeterDefault: true })
   }
 
   // Write back the normalized (fully-populated) object.

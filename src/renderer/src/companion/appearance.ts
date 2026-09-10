@@ -7,13 +7,14 @@
 // Pure functions -> unit-testable in the sandbox.
 
 import type { NudgeSettings, MoodDefault, SpritePalette } from '../../../shared/settings'
-import { SIZE_PX, COLOR_THEMES, isNaturalCoat } from '../../../shared/settings'
+import { SIZE_PX, WANDER_SPEED_MIN, WANDER_SPEED_MAX } from '../../../shared/settings'
+import { coatPalette } from './coats'
 import type { WanderConfig } from './motion'
 import type { BaseMood } from './mood'
 import type { SpeciesDef } from './species'
 
 // Base walk speed (px/s) at the default "happy" energy; scaled per mood below.
-const BASE_SPEED = 90
+const BASE_SPEED = 64
 
 // Per-preset locomotion personality. Kept as full Record tables (not ternaries)
 // so adding a MoodDefault forces an entry here — you can't ship a preset that
@@ -77,7 +78,15 @@ export function wanderConfigFor(s: NudgeSettings): WanderConfig {
   const spriteSize = SIZE_PX[s.appearance.size]
   const mood = s.appearance.moodDefault
 
-  let speed = Math.round(BASE_SPEED * SPEED_MUL[mood])
+  // Small animals take shorter steps; large ones cover more ground per stride.
+  const speciesSpeed =
+    s.appearance.character === 'penguin' ||
+    s.appearance.character === 'koala' ||
+    s.appearance.character === 'bear' ||
+    s.appearance.character === 'panda'
+      ? 0.75
+      : 1
+  let speed = Math.round(BASE_SPEED * SPEED_MUL[mood] * Math.sqrt(spriteSize / 80) * speciesSpeed)
   let restBias = REST_BIAS[mood]
   // How often the next target roams the WHOLE screen vs. settling on the ground
   // line. Lively moods range widest; calm/prickly ones keep lower and closer.
@@ -89,7 +98,15 @@ export function wanderConfigFor(s: NudgeSettings): WanderConfig {
     roamChance = 0.3
   }
 
-  return { spriteSize, speed, restBias, roamChance }
+  const percent = Number.isFinite(s.behavior.wanderSpeed) ? s.behavior.wanderSpeed : 100
+  return {
+    spriteSize,
+    speed,
+    restBias,
+    roamChance,
+    wanderSpeedMultiplier: Math.max(WANDER_SPEED_MIN, Math.min(WANDER_SPEED_MAX, percent)) / 100,
+    sleepPosition: s.behavior.sleepPosition ?? 'top-left'
+  }
 }
 
 /**
@@ -130,6 +147,5 @@ export function energyFor(mood: MoodDefault, reducedMotion: boolean): number {
  * 'natural' key is intentionally absent from COLOR_THEMES).
  */
 export function paletteFor(s: NudgeSettings, species: SpeciesDef): SpritePalette {
-  const coat = s.appearance.colorTheme
-  return isNaturalCoat(coat) ? species.palette : COLOR_THEMES[coat]
+  return coatPalette(species, s.appearance.colorTheme)
 }

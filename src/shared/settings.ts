@@ -13,20 +13,26 @@
 
 export type Size = 'small' | 'medium' | 'large'
 /** 'natural' = each animal's own colors (the default). The rest recolor the coat. */
-export type ColorThemeId = 'natural' | 'classic' | 'ash' | 'mint' | 'lavender' | 'gold'
+export type NaturalCoatId = 'natural' | 'natural-light' | 'natural-dark' | 'natural-warm'
+export type ColorThemeId =
+  | NaturalCoatId
+  | 'classic'
+  | 'ash'
+  | 'mint'
+  | 'lavender'
+  | 'gold'
+  | 'snow'
+  | 'charcoal'
+  | 'cocoa'
+  | 'copper'
+  | 'rose'
+  | 'sky'
 // The selectable resting personalities. happy/chill/alert are the originals;
 // excited/curious/grumpy/sleepy were added so each preset has a visibly distinct
 // resting face (see companion/appearance.baseMoodFor) — not just a different
 // energy level. Happy and Alert in particular now read differently at a glance
 // (warm smile vs. wide watchful eyes).
-export type MoodDefault =
-  | 'happy'
-  | 'chill'
-  | 'alert'
-  | 'excited'
-  | 'curious'
-  | 'grumpy'
-  | 'sleepy'
+export type MoodDefault = 'happy' | 'chill' | 'alert' | 'excited' | 'curious' | 'grumpy' | 'sleepy'
 /** Nudge = point it out only (safe default). autoClose = tap the X (Phase 6). */
 export type BehaviorMode = 'nudge' | 'autoClose'
 /**
@@ -61,14 +67,32 @@ export interface AppearanceSettings {
 
 export interface BehaviorSettings {
   mode: BehaviorMode
+  sleepPosition: SleepPosition
+  /** Normal wandering speed as a percentage of the species/mood baseline. */
+  wanderSpeed: number
 }
+
+export type SleepPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
+export const SLEEP_POSITIONS: SleepPosition[] = [
+  'top-left',
+  'top-right',
+  'bottom-left',
+  'bottom-right'
+]
+export const SLEEP_POSITION_LABELS: Record<SleepPosition, string> = {
+  'top-left': 'Top left',
+  'top-right': 'Top right',
+  'bottom-left': 'Bottom left',
+  'bottom-right': 'Bottom right'
+}
+export const WANDER_SPEED_MIN = 25
+export const WANDER_SPEED_MAX = 200
 
 export interface GeneralSettings {
   startWithWindows: boolean
   soundEnabled: boolean
   reducedMotion: boolean
-  /** Listen to system/app audio and auto-dance when music is detected. The pup
-   *  captures only loopback audio for beat analysis (never the microphone). */
+  /** Watch playback levels and dance to music without opening audio/screen capture. */
   reactToAudio: boolean
   /** When the webcam turns on, scurry under the camera, strike a photogenic pose
    *  for a few seconds, then resume roaming. Only an in-use boolean crosses the
@@ -105,7 +129,9 @@ export const DEFAULT_SETTINGS: NudgeSettings = {
   },
   behavior: {
     // Nudge is the safe default (PRD 6.2): point notifications out, never close.
-    mode: 'nudge'
+    mode: 'nudge',
+    sleepPosition: 'top-left',
+    wanderSpeed: 100
   },
   general: {
     startWithWindows: false,
@@ -113,13 +139,8 @@ export const DEFAULT_SETTINGS: NudgeSettings = {
     // default is least surprising for an always-on app).
     soundEnabled: false,
     reducedMotion: false,
-    // OFF by default. Capturing loopback audio for the dance requires a screen-
-    // capture session, and Windows treats any active screen capture as screen-
-    // sharing — which auto-enables Do Not Disturb / Focus. Leaving this off means
-    // launching Nudge never silences the user's notifications. It's a one-tap
-    // opt-in from Settings > "Dance to music"; even then only loopback SYSTEM
-    // audio is analyzed (never the microphone).
-    reactToAudio: false,
+    // Playback metering is read-only and does not trigger screen-sharing DND.
+    reactToAudio: true,
     // Strike a pose when the webcam comes on, by default. Uses only an in-use
     // signal (no frames), and can be turned off here.
     reactToWebcam: true
@@ -152,7 +173,7 @@ export interface SpritePalette {
 
 // The recolor coats. 'natural' is intentionally NOT here: it means "use each
 // animal's own colors" (SpeciesDef.palette), resolved by appearance.paletteFor.
-export const COLOR_THEMES: Record<Exclude<ColorThemeId, 'natural'>, SpritePalette> = {
+export const COLOR_THEMES: Record<Exclude<ColorThemeId, NaturalCoatId>, SpritePalette> = {
   classic: {
     fur: '#E9A45E',
     furLight: '#F8CE93',
@@ -202,6 +223,66 @@ export const COLOR_THEMES: Record<Exclude<ColorThemeId, 'natural'>, SpritePalett
     creamDark: '#ECDCAF',
     earInner: '#EAA07F',
     outline: 'rgba(110,80,15,0.30)'
+  },
+  snow: {
+    fur: '#E9E8E1',
+    furLight: '#FFFFFF',
+    furDark: '#C4C7C4',
+    furDarkest: '#969E9B',
+    cream: '#FFFFFF',
+    creamDark: '#E4E6DF',
+    earInner: '#E6B9BC',
+    outline: 'rgba(58,69,67,0.35)'
+  },
+  charcoal: {
+    fur: '#555B63',
+    furLight: '#828991',
+    furDark: '#363C43',
+    furDarkest: '#22282E',
+    cream: '#CACDCC',
+    creamDark: '#A8B0AF',
+    earInner: '#B697A3',
+    outline: 'rgba(17,24,30,0.5)'
+  },
+  cocoa: {
+    fur: '#8C6450',
+    furLight: '#B89376',
+    furDark: '#674736',
+    furDarkest: '#493126',
+    cream: '#E9D6BA',
+    creamDark: '#CDB595',
+    earInner: '#CC9B95',
+    outline: 'rgba(52,32,23,0.42)'
+  },
+  copper: {
+    fur: '#BD7348',
+    furLight: '#E5A675',
+    furDark: '#914F30',
+    furDarkest: '#6B3924',
+    cream: '#F5DFC2',
+    creamDark: '#DCBE96',
+    earInner: '#E4AAA0',
+    outline: 'rgba(78,41,22,0.4)'
+  },
+  rose: {
+    fur: '#DDA0B3',
+    furLight: '#F5C7D4',
+    furDark: '#B97C93',
+    furDarkest: '#925C73',
+    cream: '#FFF0F1',
+    creamDark: '#EBCFD7',
+    earInner: '#F1BCC5',
+    outline: 'rgba(106,57,78,0.34)'
+  },
+  sky: {
+    fur: '#82B8D0',
+    furLight: '#BCDEEA',
+    furDark: '#5A93B0',
+    furDarkest: '#3C6C8A',
+    cream: '#EDF7FA',
+    creamDark: '#C8E1ED',
+    earInner: '#D3B3CA',
+    outline: 'rgba(36,76,102,0.34)'
   }
 }
 
@@ -214,11 +295,20 @@ export const SIZE_LABELS: Record<Size, string> = {
 }
 export const THEME_LABELS: Record<ColorThemeId, string> = {
   natural: 'Natural',
+  'natural-light': 'Light coat',
+  'natural-dark': 'Dark coat',
+  'natural-warm': 'Warm coat',
   classic: 'Classic',
   ash: 'Ash',
   mint: 'Mint',
   lavender: 'Lavender',
-  gold: 'Gold'
+  gold: 'Gold',
+  snow: 'Snow',
+  charcoal: 'Charcoal',
+  cocoa: 'Cocoa',
+  copper: 'Copper',
+  rose: 'Rose',
+  sky: 'Sky'
 }
 export const MOOD_LABELS: Record<MoodDefault, string> = {
   happy: 'Happy',
@@ -232,7 +322,23 @@ export const MOOD_LABELS: Record<MoodDefault, string> = {
 
 /** Ordered lists for rendering pickers deterministically. */
 export const SIZE_ORDER: Size[] = ['small', 'medium', 'large']
-export const THEME_ORDER: ColorThemeId[] = ['natural', 'classic', 'ash', 'mint', 'lavender', 'gold']
+export const THEME_ORDER: ColorThemeId[] = [
+  'natural',
+  'natural-light',
+  'natural-dark',
+  'natural-warm',
+  'classic',
+  'ash',
+  'mint',
+  'lavender',
+  'gold',
+  'snow',
+  'charcoal',
+  'cocoa',
+  'copper',
+  'rose',
+  'sky'
+]
 // Ordered along a rough energy/temperament spectrum (bright & lively -> calm ->
 // prickly) so the picker and the tray submenu read naturally top to bottom.
 export const MOOD_ORDER: MoodDefault[] = [
@@ -248,8 +354,10 @@ export const MOOD_ORDER: MoodDefault[] = [
 /** True for the "use the animal's own colors" coat, which has no COLOR_THEMES
  *  entry (the renderer substitutes the SpeciesDef palette instead). Written as a
  *  type guard so `COLOR_THEMES[id]` narrows safely in the `else` branch. */
-export function isNaturalCoat(id: ColorThemeId): id is 'natural' {
-  return id === 'natural'
+export function isNaturalCoat(id: ColorThemeId): id is NaturalCoatId {
+  return (
+    id === 'natural' || id === 'natural-light' || id === 'natural-dark' || id === 'natural-warm'
+  )
 }
 
 /** Display names for the animal roster (kept beside CharacterId so they can't
@@ -300,9 +408,15 @@ export const CHARACTER_ORDER: CharacterId[] = [
  * default shape (missing keys get filled in).
  */
 export function mergeSettings(base: NudgeSettings, patch: SettingsPatch): NudgeSettings {
+  const behavior = { ...DEFAULT_SETTINGS.behavior, ...base.behavior, ...patch.behavior }
+  if (!SLEEP_POSITIONS.includes(behavior.sleepPosition))
+    behavior.sleepPosition = DEFAULT_SETTINGS.behavior.sleepPosition
+  behavior.wanderSpeed = Number.isFinite(behavior.wanderSpeed)
+    ? Math.max(WANDER_SPEED_MIN, Math.min(WANDER_SPEED_MAX, behavior.wanderSpeed))
+    : DEFAULT_SETTINGS.behavior.wanderSpeed
   return {
     appearance: { ...base.appearance, ...patch.appearance },
-    behavior: { ...base.behavior, ...patch.behavior },
+    behavior,
     general: { ...base.general, ...patch.general },
     runtime: { ...base.runtime, ...patch.runtime }
   }

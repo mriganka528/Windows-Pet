@@ -30,13 +30,7 @@
 
 /** Every idle pose the sprite can strike. `idle` is the neutral resting pose. */
 export type IdleAction =
-  | 'idle'
-  | 'lookAround'
-  | 'earTwitch'
-  | 'tailFlick'
-  | 'shake'
-  | 'stretch'
-  | 'yawn'
+  'idle' | 'lookAround' | 'earTwitch' | 'tailFlick' | 'shake' | 'stretch' | 'yawn'
 
 /** An action that is actually schedulable (everything except the resting pose). */
 export type ActiveIdleAction = Exclude<IdleAction, 'idle'>
@@ -84,10 +78,17 @@ const WEIGHTS: Record<ActiveIdleAction, number> = {
 
 // Gap between ambient actions at energy = 1 (seconds). Scaled by 1/energy so a
 // livelier mood fidgets more often. Clamped in `nextGap` so it can never spin.
-const GAP_MIN = 2.4
-const GAP_MAX = 6
+const GAP_MIN = 4
+const GAP_MAX = 9
 
-const ORDER: ActiveIdleAction[] = ['lookAround', 'earTwitch', 'tailFlick', 'shake', 'stretch', 'yawn']
+const ORDER: ActiveIdleAction[] = [
+  'lookAround',
+  'earTwitch',
+  'tailFlick',
+  'shake',
+  'stretch',
+  'yawn'
+]
 
 export function initialActivity(): ActivityState {
   return { action: 'idle', elapsed: 0, duration: 0, untilNext: GAP_MIN }

@@ -2,17 +2,20 @@ import { useEffect, useState } from 'react'
 import { SpriteCanvas } from '../companion/SpriteCanvas'
 import { paletteFor } from '../companion/appearance'
 import { speciesFor } from '../companion/species'
+import { coatPalette, coatLabel, speciesWithCoat } from '../companion/coats'
+import { frontHeadY } from '../companion/frontModel'
+import { SpeedSlider } from './SpeedSlider'
 import type { Mood } from '../companion/mood'
 import {
   CHARACTER_LABELS,
   CHARACTER_ORDER,
-  COLOR_THEMES,
   MOOD_LABELS,
   MOOD_ORDER,
+  SLEEP_POSITIONS,
+  SLEEP_POSITION_LABELS,
   SIZE_LABELS,
   SIZE_ORDER,
   SIZE_PX,
-  THEME_LABELS,
   THEME_ORDER,
   isNaturalCoat,
   type ColorThemeId,
@@ -78,13 +81,13 @@ export default function SettingsApp(): React.JSX.Element {
   const { appearance, behavior, general } = settings
   // The animal currently chosen, and the palette it should paint with — the coat
   // decides: 'natural' uses the species' own colors, any other coat recolors it.
-  const currentSpecies = speciesFor(appearance.character)
+  const baseSpecies = speciesFor(appearance.character)
+  const currentSpecies = speciesWithCoat(baseSpecies, appearance.colorTheme)
   const palette = paletteFor(settings, currentSpecies)
   // The 'natural' swatch has no fixed color of its own (it means "use this
   // animal's colors"), so it shows the chosen species' fur; the recolor coats
   // each show their own fur.
-  const swatchColor = (id: ColorThemeId): string =>
-    isNaturalCoat(id) ? currentSpecies.palette.fur : COLOR_THEMES[id].fur
+  const swatchColor = (id: ColorThemeId): string => coatPalette(baseSpecies, id).fur
 
   return (
     <div className="app">
@@ -98,6 +101,8 @@ export default function SettingsApp(): React.JSX.Element {
             palette={palette}
             dragging={false}
             idle={true}
+            frontFacing
+            reducedMotion={general.reducedMotion}
           />
         </div>
         <div className="app-title">
@@ -105,6 +110,11 @@ export default function SettingsApp(): React.JSX.Element {
           <p>Your desktop companion</p>
         </div>
       </header>
+
+      <p className="interaction-guide">
+        Click to pet · Drag to move · Right-click to sleep in the{' '}
+        {SLEEP_POSITION_LABELS[behavior.sleepPosition].toLowerCase()} corner · Click again to wake
+      </p>
 
       <Section title="Appearance">
         <Row label="Character" stack>
@@ -134,6 +144,7 @@ export default function SettingsApp(): React.JSX.Element {
                       palette={sp.palette}
                       dragging={false}
                       idle={true}
+                      still
                     />
                   </span>
                   <span className="character-label">{CHARACTER_LABELS[id]}</span>
@@ -151,14 +162,14 @@ export default function SettingsApp(): React.JSX.Element {
           />
         </Row>
 
-        <Row label="Color">
+        <Row label="Color" stack>
           <div className="swatches">
             {THEME_ORDER.map((id: ColorThemeId) => (
               <button
                 key={id}
                 type="button"
-                title={THEME_LABELS[id]}
-                aria-label={THEME_LABELS[id]}
+                title={coatLabel(baseSpecies, id)}
+                aria-label={coatLabel(baseSpecies, id)}
                 aria-pressed={appearance.colorTheme === id}
                 className={`swatch${appearance.colorTheme === id ? ' selected' : ''}${isNaturalCoat(id) ? ' natural' : ''}`}
                 style={{ background: swatchColor(id) }}
@@ -166,14 +177,78 @@ export default function SettingsApp(): React.JSX.Element {
               />
             ))}
           </div>
+          <span className="coat-name">{coatLabel(baseSpecies, appearance.colorTheme)}</span>
         </Row>
 
         <Row label="Default mood" stack>
-          <Segmented<MoodDefault>
-            options={MOOD_ORDER.map((m) => ({ value: m, label: MOOD_LABELS[m] }))}
-            value={appearance.moodDefault}
-            onChange={(moodDefault) => void patch({ appearance: { moodDefault } })}
-          />
+          <div className="mood-grid" role="group" aria-label="Default mood">
+            {MOOD_ORDER.map((mood) => (
+              <button
+                type="button"
+                key={mood}
+                className={`mood-card${appearance.moodDefault === mood ? ' selected' : ''}`}
+                aria-label={MOOD_LABELS[mood]}
+                aria-pressed={appearance.moodDefault === mood}
+                onClick={() => void patch({ appearance: { moodDefault: mood } })}
+              >
+                <span className="mood-face" aria-hidden="true">
+                  <span
+                    style={{
+                      transform: `translate(-22px, ${30 - frontHeadY(currentSpecies) * 1.08}px)`
+                    }}
+                  >
+                    <SpriteCanvas
+                      size={108}
+                      facing="right"
+                      expression={PREVIEW_EXPR[mood]}
+                      species={currentSpecies}
+                      palette={palette}
+                      dragging={false}
+                      idle={false}
+                      frontFacing
+                      still
+                    />
+                  </span>
+                </span>
+                <span>{MOOD_LABELS[mood]}</span>
+              </button>
+            ))}
+          </div>
+        </Row>
+      </Section>
+
+      <Section title="Movement & sleep">
+        <SpeedSlider
+          value={behavior.wanderSpeed}
+          onChange={(wanderSpeed) => void patch({ behavior: { wanderSpeed } })}
+        />
+        <Row label="Sleeping position" stack>
+          <div className="sleep-positions" role="group" aria-label="Sleeping position">
+            {SLEEP_POSITIONS.map((position) => (
+              <button
+                type="button"
+                key={position}
+                className={`sleep-corner${behavior.sleepPosition === position ? ' selected' : ''}`}
+                aria-label={SLEEP_POSITION_LABELS[position]}
+                aria-pressed={behavior.sleepPosition === position}
+                onClick={() => void patch({ behavior: { sleepPosition: position } })}
+              >
+                <span aria-hidden="true">
+                  {position === 'top-left'
+                    ? '↖'
+                    : position === 'top-right'
+                      ? '↗'
+                      : position === 'bottom-left'
+                        ? '↙'
+                        : '↘'}
+                </span>
+                {SLEEP_POSITION_LABELS[position]}
+              </button>
+            ))}
+          </div>
+          <p className="control-help">
+            Right-click sends your pet to this corner. Click the pet to wake it.
+          </p>
         </Row>
       </Section>
 
@@ -217,7 +292,7 @@ export default function SettingsApp(): React.JSX.Element {
         />
         <Toggle
           label="Dance to music"
-          description="Bop along when music is playing. Off by default: while it's on, Windows sees the audio capture as screen-sharing and may switch on Do Not Disturb. Listens to your PC's audio only — never the microphone."
+          description="Dance when music plays. On by default. Uses playback levels without screen sharing or microphone access, so music detection does not trigger Do Not Disturb."
           checked={general.reactToAudio}
           onChange={(reactToAudio) => void patch({ general: { reactToAudio } })}
         />

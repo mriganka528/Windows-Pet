@@ -2,7 +2,7 @@
 // Species data — the "what each animal is made of" registry (pure data).
 // ---------------------------------------------------------------------------
 // The procedural sprite (spriteModel.ts → SpriteCanvas.tsx) draws a single
-// front-facing, symmetric kawaii body plan and specialises it PER ANIMAL using
+// anatomical side-view rig and specialises it PER ANIMAL using
 // the morphology fields below (ear shape, tail, muzzle, markings, nose, …) plus
 // a natural colour palette. Adding an animal = adding one entry here; no drawing
 // code changes for the common mammals.
@@ -22,19 +22,12 @@ import type { CharacterId, SpritePalette } from '../../../shared/settings'
 
 /** Ear silhouette. `none` = no ears at all (birds, frog). */
 export type EarStyle = 'pointed' | 'round' | 'long' | 'floppy' | 'none'
-/** Tail silhouette. `none` = tailless (birds, frog). */
-export type TailStyle = 'curl' | 'bushy' | 'ring' | 'stub' | 'thin' | 'none'
+/** Tail silhouette; adult frogs and koalas have no visible external tail. */
+export type TailStyle = 'curl' | 'plume' | 'bushy' | 'ring' | 'stub' | 'thin' | 'feather' | 'none'
 /** Lower-face treatment. Drives nose/mouth placement + any muzzle patch. */
 export type MuzzleStyle = 'cat' | 'dog' | 'round' | 'snout' | 'beak' | 'wide' | 'plain'
 /** Extra colour markings layered onto the base body plan. */
-export type MarkingStyle =
-  | 'none'
-  | 'panda'
-  | 'tiger'
-  | 'fox'
-  | 'redpanda'
-  | 'penguin'
-  | 'bird'
+export type MarkingStyle = 'none' | 'panda' | 'tiger' | 'fox' | 'redpanda' | 'penguin' | 'bird'
 /** Belly/chest patch shape. `bib` = teardrop chest, `round` = big tummy. */
 export type BellyStyle = 'bib' | 'round' | 'none'
 
@@ -109,22 +102,23 @@ export const SPECIES: Record<CharacterId, SpeciesDef> = {
     label: 'Cat',
     emoji: '🐱',
     palette: {
-      fur: '#F7A83A',
-      furLight: '#FFC46B',
-      furDark: '#E08A1E',
-      furDarkest: '#B96E12',
-      cream: '#FFFFFF',
+      fur: '#DD9448',
+      furLight: '#F4BE78',
+      furDark: '#AF662D',
+      furDarkest: '#7C431F',
+      cream: '#FFF8EA',
       creamDark: '#F0E7DA',
       earInner: PINK,
       outline: 'rgba(122,74,18,0.30)'
     },
     ears: 'pointed',
     tail: 'curl',
+    tailAccent: '#FFF8EA',
     muzzle: 'cat',
     nose: '#EC8CA0',
     whiskers: true,
     belly: 'bib',
-    pawColor: '#FFFFFF'
+    pawColor: '#FFF8EA'
   },
 
   dog: {
@@ -132,21 +126,22 @@ export const SPECIES: Record<CharacterId, SpeciesDef> = {
     label: 'Dog',
     emoji: '🐶',
     palette: {
-      fur: '#E8A85C',
-      furLight: '#F8CE93',
-      furDark: '#C6822F',
-      furDarkest: '#A66A22',
-      cream: '#FBF0DC',
+      fur: '#C88947',
+      furLight: '#E8B67D',
+      furDark: '#99602E',
+      furDarkest: '#6A3C22',
+      cream: '#FFF4DC',
       creamDark: '#ECD9BD',
       earInner: '#D69B84',
       outline: 'rgba(110,70,20,0.30)'
     },
     ears: 'floppy',
-    tail: 'stub',
+    tail: 'plume',
+    tailAccent: '#FFF4DC',
     muzzle: 'dog',
     nose: DARK_NOSE,
     belly: 'bib',
-    pawColor: '#FBF0DC'
+    pawColor: '#FFF4DC'
   },
 
   fox: {
@@ -154,9 +149,9 @@ export const SPECIES: Record<CharacterId, SpeciesDef> = {
     label: 'Fox',
     emoji: '🦊',
     palette: {
-      fur: '#F0813A',
-      furLight: '#FF9E5C',
-      furDark: '#D2661F',
+      fur: '#D9772E',
+      furLight: '#F5AF60',
+      furDark: '#A74D1C',
       furDarkest: '#A94F16',
       cream: '#FBEEE0',
       creamDark: '#ECD9C4',
@@ -205,12 +200,12 @@ export const SPECIES: Record<CharacterId, SpeciesDef> = {
     label: 'Panda',
     emoji: '🐼',
     palette: {
-      fur: '#FBFBFB',
-      furLight: '#FFFFFF',
-      furDark: '#E6E6E6',
-      furDarkest: '#D2D2D2',
-      cream: '#FFFFFF',
-      creamDark: '#EDEDED',
+      fur: '#E7E4DC',
+      furLight: '#FFFEF8',
+      furDark: '#C8C4B9',
+      furDarkest: '#AFA99E',
+      cream: '#FFFDF4',
+      creamDark: '#E1DACF',
       earInner: '#7A7A7A',
       outline: 'rgba(70,70,70,0.30)'
     },
@@ -259,7 +254,7 @@ export const SPECIES: Record<CharacterId, SpeciesDef> = {
       outline: 'rgba(20,26,36,0.35)'
     },
     ears: 'none',
-    tail: 'none',
+    tail: 'feather',
     muzzle: 'beak',
     nose: '#F5A623',
     belly: 'round',
@@ -356,7 +351,7 @@ export const SPECIES: Record<CharacterId, SpeciesDef> = {
       outline: 'rgba(110,60,15,0.30)'
     },
     ears: 'round',
-    tail: 'bushy',
+    tail: 'thin',
     tailAccent: '#3A2A24',
     muzzle: 'cat',
     nose: '#EC8CA0',
@@ -450,7 +445,7 @@ export const SPECIES: Record<CharacterId, SpeciesDef> = {
       outline: 'rgba(150,110,20,0.32)'
     },
     ears: 'none',
-    tail: 'none',
+    tail: 'feather',
     muzzle: 'beak',
     nose: '#F5943B',
     belly: 'none',

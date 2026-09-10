@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMachine } from '@xstate/react'
 import { companionMachine } from './companion/machine'
 import { SpriteCanvas } from './companion/SpriteCanvas'
+import { facesFront } from './companion/presentation'
+import { speciesWithCoat } from './companion/coats'
 import { EffectsCanvas, type EffectsHandle } from './companion/EffectsCanvas'
 import { useSystemAudio } from './companion/useSystemAudio'
 import { DEFAULT_WANDER, type Vec2, type WanderConfig } from './companion/motion'
@@ -44,7 +46,7 @@ const DRAG_THRESHOLD = 5
 const SWAT_PEAK_MS = 250
 
 export default function App(): React.JSX.Element {
-  const [state, send] = useMachine(companionMachine, {
+  const [state, send, actorRef] = useMachine(companionMachine, {
     input: {
       bounds: { width: window.innerWidth, height: window.innerHeight },
       config: DEFAULT_WANDER
@@ -123,6 +125,12 @@ export default function App(): React.JSX.Element {
   // can freeze wandering without also stalling a drop's landing recovery.
   const machineStateRef = useRef<string>('idle')
   machineStateRef.current = String(state.value)
+  const sleeping = state.matches('sleeping')
+  const dozing = sleeping || state.matches('sleepTravel')
+  const dozingRef = useRef(dozing)
+  dozingRef.current = dozing
+  const refreshHitTestRef = useRef<() => void>(() => {})
+  const lastConfigRef = useRef<WanderConfig>(DEFAULT_WANDER)
 
   // The toast we're currently reacting to, mirrored so the auto-close effect can
   // read the id at the swat's peak without re-subscribing as context changes.
@@ -132,9 +140,9 @@ export default function App(): React.JSX.Element {
   // Phase 5 reaction phases, derived for the sustain effects below. Each boolean
   // stays constant across ticks within a phase, so effects keyed on them fire on
   // entry/exit only (not every frame).
-  const reacting =
-    state.matches('alert') || state.matches('travel') || state.matches('interact')
+  const reacting = state.matches('alert') || state.matches('travel') || state.matches('interact')
   const interacting = state.matches('interact')
+  const wasReactingRef = useRef(false)
   // Feature 3: holding the photogenic webcam pose. Declared here with the other
   // emitter-driving phases (not down with the render-only flags) so the sparkle
   // sustain-effect below can key on it; it's also passed to the sprite for the
@@ -149,9 +157,12 @@ export default function App(): React.JSX.Element {
       if (!alive) return
       const cfg = wanderConfigFor(s)
       setConfig(cfg)
-      send({ type: 'SET_CONFIG', config: cfg }) // live resize + snap to ground
+      if (JSON.stringify(lastConfigRef.current) !== JSON.stringify(cfg)) {
+        lastConfigRef.current = cfg
+        send({ type: 'SET_CONFIG', config: cfg })
+      }
       const sp = speciesFor(s.appearance.character)
-      setSpecies(sp)
+      setSpecies(speciesWithCoat(sp, s.appearance.colorTheme))
       setPalette(paletteFor(s, sp))
       setEnergy(energyFor(s.appearance.moodDefault, s.general.reducedMotion))
       setReducedMotion(s.general.reducedMotion)
@@ -189,6 +200,7 @@ export default function App(): React.JSX.Element {
     const t = window.setTimeout(() => {
       if (welcomedRef.current) return
       welcomedRef.current = true
+      if (dozingRef.current || pausedRef.current) return
       applyMood({ type: 'WELCOME' }) // happy face, briefly overriding the resting mood
       setHopNonce((n) => n + 1) // one-shot bounce
       const p = posRef.current
@@ -216,11 +228,14 @@ export default function App(): React.JSX.Element {
         st === 'landing' ||
         st === 'alert' ||
         st === 'travel' ||
-        st === 'interact'
-      if (!pausedRef.current || mustAdvance) {
+        st === 'interact' ||
+        st === 'celebrate' ||
+        st === 'sleepTravel'
+      if (st !== 'sleeping' && (!pausedRef.current || mustAdvance)) {
         send({ type: 'TICK', dt })
       }
       applyMood({ type: 'TICK', dt }) // reactions always decay
+      refreshHitTestRef.current()
       raf = requestAnimationFrame(loop)
     }
     raf = requestAnimationFrame(loop)
@@ -229,16 +244,33 @@ export default function App(): React.JSX.Element {
 
   // --- resize -> SET_BOUNDS -------------------------------------------------
   useEffect(() => {
-    const onResize = (): void =>
-      send({ type: 'SET_BOUNDS', bounds: { width: window.innerWidth, height: window.innerHeight } })
+    let alive = true
+    const onResize = (): void => {
+      if (window.nudge?.getGeometry) {
+        void window.nudge.getGeometry().then((bounds) => {
+          if (alive) send({ type: 'SET_BOUNDS', bounds })
+        })
+      } else
+        send({
+          type: 'SET_BOUNDS',
+          bounds: { width: window.innerWidth, height: window.innerHeight }
+        })
+    }
+    onResize()
+    const off = window.nudge?.onGeometryChanged((bounds) => send({ type: 'SET_BOUNDS', bounds }))
     window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
+    return () => {
+      alive = false
+      off?.()
+      window.removeEventListener('resize', onResize)
+    }
   }, [send])
 
   // --- companion events from main (notification -> angry, etc.) -------------
   useEffect(() => {
     if (!window.nudge?.onCompanionEvent) return
     const off = window.nudge.onCompanionEvent((evt) => {
+      if (dozingRef.current) return
       const p = posRef.current
       const sz = sizeRef.current
       if (evt.kind === 'alert') {
@@ -265,19 +297,24 @@ export default function App(): React.JSX.Element {
     const offAppeared = subAppeared((n) => {
       // Never yank the pup out of a drag the user is doing. (The machine also
       // no-ops NOTIFICATION_APPEARED while dragging; this is the first guard.)
-      if (draggingRef.current) return
+      if (draggingRef.current || dozingRef.current || pausedRef.current) return
       send({ type: 'NOTIFICATION_APPEARED', id: n.id, rect: n.rect, interactive: n.interactive })
+      welcomedRef.current = true // do not let the launch greeting override this reaction
       applyMood({ type: 'ALERT' }) // notice it immediately, even before walking over
     })
     const offClosed = subClosed((n) => {
-      // Safe to always forward: the machine ignores ids it isn't reacting to.
+      const current = actorRef.getSnapshot().context.notification?.id === n.id
       send({ type: 'NOTIFICATION_CLOSED', id: n.id })
+      if (current) {
+        applyMood({ type: 'CALM' })
+        effectsRef.current?.clear('anger')
+      }
     })
     return () => {
       offAppeared?.()
       offClosed?.()
     }
-  }, [send, applyMood])
+  }, [send, applyMood, actorRef])
 
   // --- webcam in-use -> scurry under the camera and pose (Feature 3) --------
   // Main polls the OS webcam consent store and sends ONLY an in-use boolean — no
@@ -291,7 +328,7 @@ export default function App(): React.JSX.Element {
     if (!sub) return
     const off = sub(({ inUse }) => {
       send({ type: inUse ? 'WEBCAM_ON' : 'WEBCAM_OFF' })
-      if (inUse) applyMood({ type: 'PET' }) // happy, ready-for-the-shot face
+      if (inUse && !dozingRef.current && !pausedRef.current) applyMood({ type: 'PET' })
     })
     return off
   }, [send, applyMood])
@@ -300,39 +337,56 @@ export default function App(): React.JSX.Element {
   // Chill companions settle to a sleepy face (baseMoodFor); this gives that a
   // gentle, periodic "Zzz" without baking particle timing into the pure modules.
   useEffect(() => {
-    if (expression !== 'sleepy') return
+    if (
+      (!sleeping && expression !== 'sleepy') ||
+      reducedMotion ||
+      (dozing && !sleeping) ||
+      reacting
+    )
+      return
     const puff = (): void => {
       const p = posRef.current
       const sz = sizeRef.current
-      effectsRef.current?.sleep(p.x + sz * 0.66, p.y + sz * 0.2)
+      const headX = actorRef.getSnapshot().context.facing === 'left' ? 0.26 : 0.74
+      effectsRef.current?.sleep(p.x + sz * headX, p.y + sz * (sleeping ? 0.67 : 0.25))
     }
     puff()
     const id = window.setInterval(puff, 2600)
     return () => window.clearInterval(id)
-  }, [expression])
+  }, [expression, sleeping, dozing, reducedMotion, reacting, actorRef])
 
   // --- notification reaction: stay alarmed, then "bark" while nudging --------
   // Keep the angry face topped up from the instant a toast appears through the
   // walk over and the nudge, so the mood doesn't decay to neutral mid-trip.
   useEffect(() => {
-    if (!reacting) return
+    if (!reacting) {
+      if (wasReactingRef.current) {
+        applyMood({ type: 'CALM' })
+        effectsRef.current?.clear('anger')
+      }
+      wasReactingRef.current = false
+      return
+    }
+    wasReactingRef.current = true
     applyMood({ type: 'ALERT' })
+    effectsRef.current?.clear('sleep')
+    effectsRef.current?.clear('heart')
     const id = window.setInterval(() => applyMood({ type: 'ALERT' }), 700)
     return () => window.clearInterval(id)
   }, [reacting, applyMood])
 
   // Anger puffs while actually standing at the toast (the "nudge" itself).
   useEffect(() => {
-    if (!interacting) return
+    if (!reacting || reducedMotion) return
     const bark = (): void => {
       const p = posRef.current
       const sz = sizeRef.current
       effectsRef.current?.anger(p.x + sz * 0.72, p.y + sz * 0.22)
     }
     bark()
-    const id = window.setInterval(bark, 650)
+    const id = window.setInterval(bark, interacting ? 450 : 850)
     return () => window.clearInterval(id)
-  }, [interacting])
+  }, [interacting, reacting, reducedMotion])
 
   // --- auto-close: paw the toast shut, then return to natural form ----------
   // Only in auto-close mode. The moment the pup arrives beside the toast (enters
@@ -373,7 +427,7 @@ export default function App(): React.JSX.Element {
   }, [posing])
 
   // --- sound-sensitive dance (Feature 2) ------------------------------------
-  // Listen to the PC's own audio (loopback, never the mic) and drive the dance:
+  // Follow Windows' read-only playback meter (no capture) and drive the dance:
   // the detector's on/off edges flip the machine's `dance` state via
   // MUSIC_START / MUSIC_STOP, and each detected beat pops the sprite + puffs a
   // musical note. Gated by the "Dance to music" toggle and Pause (audioEnabled);
@@ -401,11 +455,13 @@ export default function App(): React.JSX.Element {
     const sz = sizeRef.current
     effectsRef.current?.notes(p.x + sz * 0.5, p.y + sz * 0.12, 1) // ♪ doodle
   }, [])
-  useSystemAudio({ enabled: audioEnabled, onBeat, onMusicChange })
+  useSystemAudio({ enabled: audioEnabled && !dozing, onBeat, onMusicChange })
 
   // --- pointer: click-through toggle + pet-vs-drag --------------------------
   useEffect(() => {
     const down = { x: 0, y: 0 }
+    const offset = { x: 0, y: 0 }
+    let cursor: Vec2 | null = null
     let pending = false // pressed on the pup, not yet moved enough to be a drag
 
     function spriteRect(): { left: number; top: number; right: number; bottom: number } {
@@ -424,9 +480,13 @@ export default function App(): React.JSX.Element {
     }
 
     function onMouseMove(e: MouseEvent): void {
-      const half = sizeRef.current / 2
+      cursor = { x: e.clientX, y: e.clientY }
       if (draggingRef.current) {
-        send({ type: 'DRAG_MOVE', position: { x: e.clientX - half, y: e.clientY - half } })
+        if (!(e.buttons & 1)) {
+          cancelPress()
+          return
+        }
+        send({ type: 'DRAG_MOVE', position: { x: e.clientX - offset.x, y: e.clientY - offset.y } })
         return
       }
       if (pending) {
@@ -436,7 +496,10 @@ export default function App(): React.JSX.Element {
           pending = false
           send({ type: 'PICK_UP' })
           applyMood({ type: 'DRAG_START' })
-          send({ type: 'DRAG_MOVE', position: { x: e.clientX - half, y: e.clientY - half } })
+          send({
+            type: 'DRAG_MOVE',
+            position: { x: e.clientX - offset.x, y: e.clientY - offset.y }
+          })
         }
         return
       }
@@ -445,15 +508,25 @@ export default function App(): React.JSX.Element {
     }
 
     function onMouseDown(e: MouseEvent): void {
-      if (!overSprite(e.clientX, e.clientY)) return
+      if (e.button !== 0 || !overSprite(e.clientX, e.clientY)) return
+      cursor = { x: e.clientX, y: e.clientY }
+      if (dozingRef.current) {
+        dozingRef.current = false
+        send({ type: 'WAKE' })
+        applyMood({ type: 'CALM' })
+        return
+      }
       // Capture the mouse now; decide pet-vs-drag on move/up.
       down.x = e.clientX
       down.y = e.clientY
+      offset.x = e.clientX - posRef.current.x
+      offset.y = e.clientY - posRef.current.y
       pending = true
       setIgnoring(false)
     }
 
     function onMouseUp(e: MouseEvent): void {
+      if (e.button !== 0) return
       if (draggingRef.current) {
         send({ type: 'DROP' })
         applyMood({ type: 'DRAG_END' })
@@ -469,13 +542,43 @@ export default function App(): React.JSX.Element {
       setIgnoring(!overSprite(e.clientX, e.clientY))
     }
 
+    function onContextMenu(e: MouseEvent): void {
+      e.preventDefault()
+      if (!overSprite(e.clientX, e.clientY) || draggingRef.current) return
+      pending = false
+      dozingRef.current = true
+      send({ type: 'SLEEP' })
+      applyMood({ type: 'CALM' })
+    }
+
+    function cancelPress(): void {
+      pending = false
+      if (draggingRef.current) {
+        send({ type: 'DROP' })
+        applyMood({ type: 'DRAG_END' })
+      }
+      cursor = null
+      setIgnoring(true)
+    }
+
+    refreshHitTestRef.current = () => {
+      if (!draggingRef.current && !pending && cursor) setIgnoring(!overSprite(cursor.x, cursor.y))
+    }
+
     window.addEventListener('mousemove', onMouseMove)
     window.addEventListener('mousedown', onMouseDown)
     window.addEventListener('mouseup', onMouseUp)
+    window.addEventListener('contextmenu', onContextMenu)
+    window.addEventListener('blur', cancelPress)
+    document.addEventListener('mouseleave', cancelPress)
     return () => {
       window.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('mousedown', onMouseDown)
       window.removeEventListener('mouseup', onMouseUp)
+      window.removeEventListener('contextmenu', onContextMenu)
+      window.removeEventListener('blur', cancelPress)
+      document.removeEventListener('mouseleave', cancelPress)
+      refreshHitTestRef.current = () => {}
     }
   }, [send, applyMood])
 
@@ -490,7 +593,8 @@ export default function App(): React.JSX.Element {
   // finish even while paused, so they aren't gated.)
   const moving =
     state.matches('travel') ||
-    state.matches('webcamTravel') ||
+    state.matches('sleepTravel') ||
+    (state.matches('webcamTravel') && !pausedRef.current) ||
     (state.matches('wander') && !pausedRef.current)
   // Raise a front paw while reacting in place: the "notice" beat (alert) and the
   // nudge (interact). NOT during travel — that's the walk, and a raised paw would
@@ -504,6 +608,11 @@ export default function App(): React.JSX.Element {
     <div className="stage">
       <div
         className="sprite-container"
+        data-state={String(state.value)}
+        data-character={species.id}
+        role="img"
+        aria-label={`${species.label}: ${sleeping ? 'sleeping. Click to wake' : dozing ? 'going to sleep. Click to wake' : 'click to pet, drag to move, right-click to sleep'}`}
+        title={dozing ? 'Click to wake up' : 'Click to pet · Drag to move · Right-click to sleep'}
         style={{
           width: spriteSize,
           height: spriteSize,
@@ -513,7 +622,8 @@ export default function App(): React.JSX.Element {
         <SpriteCanvas
           size={spriteSize}
           facing={facing}
-          expression={expression}
+          expression={reacting ? 'angry' : expression}
+          frontFacing={facesFront(String(state.value), state.context)}
           species={species}
           palette={palette}
           dragging={dragging}
@@ -521,6 +631,9 @@ export default function App(): React.JSX.Element {
           energy={energy}
           reducedMotion={reducedMotion}
           moving={moving}
+          sleeping={sleeping}
+          distanceTravelled={state.context.distanceTravelled}
+          frozen={pausedRef.current && !moving && !dragging && !sleeping}
           gesturing={gesturing}
           swatNonce={swatNonce}
           dancing={dancing}
@@ -531,10 +644,12 @@ export default function App(): React.JSX.Element {
         />
       </div>
       <EffectsCanvas ref={effectsRef} />
-      <div className="debug-badge">
-        Nudge · {String(state.value)} · {expression} · {interactive ? 'active' : 'click-through'}
-        {pausedRef.current ? ' · paused' : ''}
-      </div>
+      {import.meta.env.DEV && (
+        <div className="debug-badge">
+          Nudge · {String(state.value)} · {expression} · {interactive ? 'active' : 'click-through'}
+          {pausedRef.current ? ' · paused' : ''}
+        </div>
+      )}
     </div>
   )
 }

@@ -126,14 +126,20 @@ describe('companionMachine — notification flow (Phase 5)', () => {
     expect(snap.context.facing).toBe('right')
   })
 
-  it('NOTIFICATION_CLOSED for the current toast unwinds to idle and clears it', () => {
+  it('holds a front-facing finish after dismissal, then resumes wandering', () => {
     const a = boot()
     a.send({ type: 'NOTIFICATION_APPEARED', id: 'n1', rect: toast, interactive: false })
     tickUntil(a, (x) => x.getSnapshot().value === 'interact')
     a.send({ type: 'NOTIFICATION_CLOSED', id: 'n1' })
     const snap = a.getSnapshot()
-    expect(snap.value).toBe('idle')
+    expect(snap.value).toBe('celebrate')
     expect(snap.context.notification).toBeNull()
+    const position = snap.context.position
+    tick(a, 5)
+    expect(a.getSnapshot().value).toBe('celebrate')
+    expect(a.getSnapshot().context.position).toEqual(position)
+    tickUntil(a, (actor) => actor.getSnapshot().value === 'wander')
+    expect(a.getSnapshot().value).toBe('wander')
   })
 
   it('a close can unwind even during alert (before arrival)', () => {
@@ -208,10 +214,102 @@ describe('companionMachine — notification flow (Phase 5)', () => {
     const roamAfter = roam.getSnapshot().context.position
     const wanderStep = Math.hypot(roamAfter.x - roamBefore.x, roamAfter.y - roamBefore.y)
 
-    // The dash step is the boosted amount (path here is long enough not to snap),
-    // and it always beats a full-speed wander step.
-    expect(travelStep).toBeCloseTo(cfg.speed * TRAVEL_SPEED_SCALE * dt) // 100*4.5*0.05 = 22.5
+    // Both accelerate from rest; a notification builds speed faster without
+    // jumping to its maximum on the first frame.
+    expect(travelStep).toBeGreaterThan(0)
+    expect(travelStep).toBeLessThan(cfg.speed * TRAVEL_SPEED_SCALE * dt)
     expect(travelStep).toBeGreaterThan(wanderStep)
+  })
+})
+
+describe('sleep and wake', () => {
+  it('walks to the top-left by default, sleeps indefinitely, and wakes to roaming', () => {
+    const a = boot()
+    const before = a.getSnapshot().context.position
+    a.send({ type: 'SLEEP' })
+    expect(a.getSnapshot().value).toBe('sleepTravel')
+    expect(a.getSnapshot().context.position).toEqual(before)
+    tickUntil(a, (actor) => actor.getSnapshot().value === 'sleeping')
+    expect(a.getSnapshot().value).toBe('sleeping')
+    const bed = a.getSnapshot().context.position
+    expect(bed).toEqual({ x: 12, y: 12 })
+    tick(a, 600)
+    expect(a.getSnapshot().context.position).toEqual(bed)
+    expect(a.getSnapshot().value).toBe('sleeping')
+    a.send({ type: 'WAKE' })
+    expect(a.getSnapshot().value).toBe('wander')
+    tick(a, 10)
+    const awake = a.getSnapshot().context.position
+    expect(Math.hypot(awake.x - bed.x, awake.y - bed.y)).toBeGreaterThan(5)
+    a.stop()
+  })
+
+  it('cancels a notification and ignores reactions until woken', () => {
+    const a = boot()
+    const toast = { x: 600, y: 300, width: 300, height: 120 }
+    a.send({ type: 'NOTIFICATION_APPEARED', id: 'before', rect: toast, interactive: false })
+    a.send({ type: 'SLEEP' })
+    for (const state of ['sleepTravel', 'sleeping']) {
+      expect(a.getSnapshot().value).toBe(state)
+      a.send({ type: 'NOTIFICATION_APPEARED', id: 'new', rect: toast, interactive: true })
+      a.send({ type: 'NOTIFICATION_CLOSED', id: 'before' })
+      a.send({ type: 'MUSIC_START' })
+      a.send({ type: 'WEBCAM_ON' })
+      a.send({ type: 'SLEEP' })
+      expect(a.getSnapshot().value).toBe(state)
+      expect(a.getSnapshot().context.notification).toBeNull()
+      tickUntil(a, (actor) => actor.getSnapshot().value === 'sleeping')
+    }
+    a.send({ type: 'WAKE' })
+    tick(a, 1)
+    expect(a.getSnapshot().value).toBe('wander')
+    a.stop()
+  })
+
+  it('can cancel the walk to bed immediately', () => {
+    const a = boot()
+    a.send({ type: 'SLEEP' })
+    tick(a, 3)
+    a.send({ type: 'WAKE' })
+    expect(a.getSnapshot().context.sleepRequested).toBe(false)
+    expect(a.getSnapshot().value).toBe('wander')
+    a.stop()
+  })
+
+  it('keeps sleeping above a moved taskbar and after changing size', () => {
+    const a = boot()
+    a.send({ type: 'SLEEP' })
+    tickUntil(a, (actor) => actor.getSnapshot().value === 'sleeping')
+    a.send({
+      type: 'SET_BOUNDS',
+      bounds: { width: 700, height: 500, workArea: { x: 45, y: 0, width: 655, height: 455 } }
+    })
+    a.send({ type: 'SET_CONFIG', config: { ...DEFAULT_WANDER, spriteSize: 128 } })
+    tickUntil(a, (actor) => actor.getSnapshot().value === 'sleeping')
+    expect(a.getSnapshot().value).toBe('sleeping')
+    expect(a.getSnapshot().context.position).toEqual({ x: 57, y: 12 })
+    a.stop()
+  })
+
+  it('does not teleport a dragged pet on a mood or size change', () => {
+    const a = boot()
+    a.send({ type: 'PICK_UP' })
+    a.send({ type: 'DRAG_MOVE', position: { x: 200, y: 180 } })
+    a.send({ type: 'DROP' })
+    a.send({ type: 'SET_CONFIG', config: { ...DEFAULT_WANDER, speed: 45 } })
+    expect(a.getSnapshot().context.position).toEqual({ x: 200, y: 180 })
+    a.send({ type: 'SET_CONFIG', config: { ...DEFAULT_WANDER, spriteSize: 128 } })
+    expect(a.getSnapshot().context.position.y + 128).toBe(260)
+    a.stop()
+  })
+
+  it('clamps a pending wander destination after display shrink', () => {
+    const a = boot()
+    tickUntil(a, (actor) => actor.getSnapshot().value === 'wander')
+    a.send({ type: 'SET_BOUNDS', bounds: { width: 200, height: 150 } })
+    expect(a.getSnapshot().context.target.x).toBeLessThanOrEqual(120)
+    expect(a.getSnapshot().context.target.y).toBeLessThanOrEqual(70)
+    a.stop()
   })
 })
 
