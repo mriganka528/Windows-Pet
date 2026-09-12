@@ -54,6 +54,9 @@ internal static class NativeWindows
     private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, nint lParam);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern nint FindWindowEx(nint parent, nint after, string className, string? title);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetClassName(nint hWnd, StringBuilder lpClassName, int nMaxCount);
 
     [DllImport("user32.dll")]
@@ -78,6 +81,19 @@ internal static class NativeWindows
     private const int SM_CXSCREEN = 0; // primary monitor width
     private const int SM_CYSCREEN = 1; // primary monitor height
 
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SystemParametersInfo(uint action, uint param, out RECT rect, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForSystem();
+
+    [DllImport("user32.dll")]
+    private static extern nint MonitorFromPoint(POINT point, uint flags);
+
+    [DllImport("shcore.dll")]
+    private static extern int GetDpiForMonitor(nint monitor, int dpiType, out uint dpiX, out uint dpiY);
+
     // DWM "cloaked" attribute: UWP/WinUI windows are often present-but-hidden
     // (composed off-screen). A live, shown toast is NOT cloaked; its dormant host
     // windows ARE — checking this drops most of the invisible noise.
@@ -93,6 +109,13 @@ internal static class NativeWindows
         public int Top;
         public int Right;
         public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT
+    {
+        public int X;
+        public int Y;
     }
 
     /// <summary>
@@ -146,6 +169,37 @@ internal static class NativeWindows
         return result;
     }
 
+    /// <summary>
+    /// Find shell surfaces directly by class. On Windows 8+ EnumWindows omits
+    /// some immersive windows; an empty EnumWindows result is not proof that a
+    /// toast has no HWND. No window titles or notification content are read.
+    /// </summary>
+    internal static List<TopWindow> FindToastWindows()
+    {
+        var windows = new List<TopWindow>();
+        foreach (string className in ToastHeuristics.CandidateWindowClasses)
+        {
+            nint previous = 0;
+            for (int index = 0; index < 64; index++)
+            {
+                nint hwnd = FindWindowEx(0, previous, className, null);
+                if (hwnd == 0 || hwnd == previous) break;
+                previous = hwnd;
+                try
+                {
+                    if (!IsWindowVisible(hwnd) || IsCloaked(hwnd) || !GetWindowRect(hwnd, out RECT r)) continue;
+                    GetWindowThreadProcessId(hwnd, out uint pid);
+                    using var process = System.Diagnostics.Process.GetProcessById((int)pid);
+                    if (!ToastHeuristics.IsToastHostProcess(process.ProcessName)) continue;
+                    windows.Add(new TopWindow(hwnd, className, (int)pid, r.Left, r.Top,
+                        r.Right - r.Left, r.Bottom - r.Top));
+                }
+                catch { /* The shell may destroy the banner while we inspect it. */ }
+            }
+        }
+        return windows;
+    }
+
     private static bool IsCloaked(nint hwnd)
     {
         try
@@ -185,5 +239,27 @@ internal static class NativeWindows
             // fall through to the default below
         }
         return (1920, 1080);
+    }
+
+    /// <summary>Primary usable desktop in physical pixels, excluding the taskbar.</summary>
+    internal static Bounds PrimaryWorkArea()
+    {
+        const uint SPI_GETWORKAREA = 0x0030;
+        if (SystemParametersInfo(SPI_GETWORKAREA, 0, out RECT rect, 0))
+            return new Bounds(rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top);
+        (int width, int height) = PrimaryScreenSize();
+        return new Bounds(0, 0, width, height);
+    }
+
+    internal static double PrimaryScaleFactor()
+    {
+        // The primary monitor contains (0, 0). Read its current effective DPI;
+        // system DPI alone can be stale after changing the primary display.
+        const uint MONITOR_DEFAULTTOPRIMARY = 1;
+        const int MDT_EFFECTIVE_DPI = 0;
+        nint monitor = MonitorFromPoint(new POINT(), MONITOR_DEFAULTTOPRIMARY);
+        if (GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, out uint dpi, out _) == 0 && dpi > 0)
+            return dpi / 96.0;
+        return Math.Max(96u, GetDpiForSystem()) / 96.0;
     }
 }

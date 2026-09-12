@@ -19,6 +19,7 @@ namespace NudgeWatcher;
 
 /// <summary>Screen rectangle in physical pixels (top-left origin).</summary>
 public sealed record Bounds(double X, double Y, double Width, double Height);
+public sealed record ScreenPoint(double X, double Y);
 
 /// <summary>A detected notification event, serialized as one JSON line.</summary>
 public sealed class NotificationInfo
@@ -41,6 +42,11 @@ public sealed class NotificationInfo
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Bounds? Bounds { get; init; }
 
+    /// <summary>Measured centre of the visible dismiss button, when accessible.</summary>
+    [JsonPropertyName("closePoint")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ScreenPoint? ClosePoint { get; init; }
+
     /// <summary>
     /// True if the toast exposes interactive controls beyond a plain
     /// dismiss/settings affordance (an inline reply box, a dropdown, action
@@ -60,12 +66,14 @@ public sealed class NotificationInfo
     public string Ts { get; init; } = DateTime.UtcNow.ToString("o");
 
     public static NotificationInfo Appeared(
-        string id, string? appId, Bounds bounds, bool interactive, bool hasCloseButton) => new()
+        string id, string? appId, Bounds bounds, bool interactive, bool hasCloseButton,
+        ScreenPoint? closePoint = null) => new()
     {
         Type = MessageTypes.Appeared,
         Id = id,
         AppId = appId,
         Bounds = bounds,
+        ClosePoint = closePoint,
         Interactive = interactive,
         HasCloseButton = hasCloseButton
     };

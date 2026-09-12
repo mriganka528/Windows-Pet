@@ -9,7 +9,10 @@ import {
   webcamTarget,
   WEBCAM_TOP_MARGIN,
   CLOSE_INSET_X,
+  CLOSE_INSET_Y,
   PAW_CONTACT_FX,
+  PAW_CONTACT_FY,
+  notificationClosePoint,
   DEFAULT_WANDER,
   TRAVEL_SPEED_SCALE,
   type Bounds,
@@ -104,33 +107,68 @@ describe('stepToward', () => {
 })
 
 describe('notificationTarget', () => {
-  it('aims the front paw at the top-right X of a right-hugging toast (common case)', () => {
-    // A real Windows toast tucks into the bottom-right; the dismiss (X) sits at
-    // its TOP-RIGHT corner. The pup parks up-and-left so its raised paw reaches it.
+  it('overlaps the message with its raised paw at the close button', () => {
     const rect: Rect = { x: 620, y: 440, width: 360, height: 110 }
     const t = notificationTarget(rect, bounds, cfg)
-    // closeX = 620+360-22 = 958; x = round(958 - 0.82*80) = round(892.4) = 892
-    expect(t.x).toBe(892)
-    // closeY = 440+20 = 460; y = round(460 - 0.8*80) = round(396) = 396
-    expect(t.y).toBe(396)
+    expect(t.x + PAW_CONTACT_FX * cfg.spriteSize).toBeCloseTo(958)
+    expect(t.y + PAW_CONTACT_FY * cfg.spriteSize).toBeCloseTo(460)
+    expect(t.y + cfg.spriteSize * 0.5).toBeGreaterThan(rect.y)
   })
 
   it('aims at the X of a left-hugging toast too', () => {
     const rect: Rect = { x: 20, y: 100, width: 300, height: 120 }
     const t = notificationTarget(rect, bounds, cfg)
-    // closeX = 20+300-22 = 298; x = round(298 - 65.6) = 232
-    expect(t.x).toBe(232)
-    // closeY = 100+20 = 120; y = round(120 - 64) = 56
-    expect(t.y).toBe(56)
+    expect(t.x + PAW_CONTACT_FX * cfg.spriteSize).toBeCloseTo(298)
+    expect(t.y + PAW_CONTACT_FY * cfg.spriteSize).toBeCloseTo(120)
   })
 
-  it('clamps the target so the whole body stays on-screen', () => {
-    // Toast pinned to the very top-right → naive paw-align y would be negative and
-    // x would push the body off the right edge; both clamp back inside bounds.
+  it('keeps the body visible at the top edge with the close point inside the sprite', () => {
     const rect: Rect = { x: 820, y: 0, width: 200, height: 50 }
     const t = notificationTarget(rect, bounds, cfg)
-    expect(t.x).toBe(920) // clamped from round(998-65.6)=932 to maxX=1000-80
-    expect(t.y).toBe(0) // clamped up from round(20-64) = -44
+    const close = notificationClosePoint(rect)
+    expect(close.x).toBeGreaterThan(t.x)
+    expect(close.x).toBeLessThan(t.x + cfg.spriteSize)
+    expect(close.y).toBeGreaterThan(t.y)
+    expect(close.y).toBeLessThan(t.y + cfg.spriteSize)
+    expect(t.y).toBe(0)
+  })
+
+  it('stays over the message for a top-left toast', () => {
+    const rect: Rect = { x: 0, y: 0, width: 360, height: 150 }
+    const t = notificationTarget(rect, bounds, cfg)
+    expect(t.x + cfg.spriteSize).toBeLessThan(rect.x + rect.width)
+    expect(t.y).toBe(0)
+  })
+
+  it('uses the measured button centre instead of a guessed inset', () => {
+    const rect = { x: 620, y: 400, width: 360, height: 150 }
+    const close = { x: 941, y: 437 }
+    const t = notificationTarget(rect, bounds, cfg, close)
+    expect(t.x + PAW_CONTACT_FX * cfg.spriteSize).toBeCloseTo(close.x)
+    expect(t.y + PAW_CONTACT_FY * cfg.spriteSize).toBeCloseTo(close.y)
+  })
+
+  it.each([48, 80, 128])(
+    'aligns a %ipx pet with the cross while keeping its body inside the desktop',
+    (spriteSize) => {
+      const screen = { ...bounds, workArea: { x: 0, y: 0, width: 1000, height: 552 } }
+      const rect = { x: 620, y: 260, width: 360, height: 280 }
+      const t = notificationTarget(rect, screen, { ...cfg, spriteSize })
+      expect(t.y).toBeGreaterThanOrEqual(0)
+      expect(t.y + spriteSize).toBeLessThanOrEqual(screen.workArea.height)
+      expect(t.y + spriteSize * PAW_CONTACT_FY).toBeCloseTo(rect.y + CLOSE_INSET_Y)
+      expect(t.x + spriteSize * PAW_CONTACT_FX).toBeCloseTo(rect.x + rect.width - CLOSE_INSET_X)
+      expect(t.x).toBeGreaterThanOrEqual(0)
+      expect(t.x + spriteSize).toBeLessThanOrEqual(screen.width)
+    }
+  )
+
+  it('stays within the work area even when a banner leaves no free side', () => {
+    const t = notificationTarget({ x: 0, y: 0, width: 1000, height: 600 }, bounds, cfg)
+    expect(t.x).toBeGreaterThanOrEqual(0)
+    expect(t.y).toBeGreaterThanOrEqual(0)
+    expect(t.x + cfg.spriteSize).toBeLessThanOrEqual(bounds.width)
+    expect(t.y + cfg.spriteSize).toBeLessThanOrEqual(bounds.height)
   })
 
   it('lands the paw tip on the close button (contact alignment)', () => {
@@ -140,6 +178,7 @@ describe('notificationTarget', () => {
     const t = notificationTarget(rect, bounds, cfg)
     const closeX = rect.x + rect.width - CLOSE_INSET_X
     expect(Math.abs(t.x + PAW_CONTACT_FX * cfg.spriteSize - closeX)).toBeLessThanOrEqual(1)
+    expect(t.y + PAW_CONTACT_FY * cfg.spriteSize).toBeCloseTo(rect.y + CLOSE_INSET_Y)
   })
 })
 

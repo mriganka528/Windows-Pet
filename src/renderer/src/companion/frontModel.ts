@@ -4,6 +4,7 @@ import { buildHead, collar } from './headModel'
 import { limb, tail, type CompanionModel, type ModelOptions } from './spriteModel'
 import { M, L, Q, ell, path, curve, type Prim } from './primitives'
 import { volume, softShadow, furDetail, alpha } from './surfaces'
+import { NOTIFICATION_PAW } from './notificationPose'
 
 export function frontHeadY(sp: SpeciesDef): number {
   return ANATOMY[sp.id].frontHeadY
@@ -12,6 +13,9 @@ export function frontHeadY(sp: SpeciesDef): number {
 /** A seated, padded silhouette for smiles, paw gestures, dance and webcam poses. */
 export function buildFrontModel(sp: SpeciesDef, opts: ModelOptions): CompanionModel {
   const a = ANATOMY[sp.id]
+  const contact = opts.swatTarget ?? NOTIFICATION_PAW
+  // limb() draws the paw pad slightly offset from the end of the leg.
+  const handTarget = { x: contact.x - 1.3, y: contact.y + 1.2 }
   const p = sp.palette
   const bird = sp.muzzle === 'beak'
   const frog = !!sp.eyesOnTop
@@ -124,6 +128,11 @@ export function buildFrontModel(sp: SpeciesDef, opts: ModelOptions): CompanionMo
         ]
       })
       const wx = 50 + side * 25
+      const reach = side > 0 ? (opts.swat ?? 0) : 0
+      const wingTip = {
+        x: wx + side * 4 + (contact.x - wx - side * 4) * reach,
+        y: by + 14 + (contact.y - by - 14) * reach
+      }
       parts.push({
         id: 'wing',
         prims: [
@@ -131,18 +140,21 @@ export function buildFrontModel(sp: SpeciesDef, opts: ModelOptions): CompanionMo
             path(
               [
                 M(wx, by - 19),
-                Q(wx + side * 9, by - 8, wx + side * 8, by + 10),
-                Q(wx + side * 4, by + 21, wx - side * 2, by + 12),
+                Q(wx + side * 9, by - 8, wingTip.x + side * 4, wingTip.y - 4),
+                Q(wingTip.x, wingTip.y + 7, wingTip.x - side * 6, wingTip.y - 2),
                 Q(wx - side * 4, by - 5, wx, by - 19)
               ],
               p.furDark
             ),
             p.fur,
             p.furDarkest
-          )
+          ),
+          ...(reach > 0
+            ? [volume(ell(wingTip.x, wingTip.y, 4.5, 3.5, p.furDark), p.fur, p.furDarkest)]
+            : [])
         ],
         anchor: { x: wx, y: by - 16 },
-        rotation: side * ((opts.paw ?? 0) * 0.16 + dance * 0.12)
+        rotation: side * ((opts.paw ?? 0) * 0.16 + dance * 0.12) * (1 - reach)
       })
     } else if (panda) {
       parts.push({
@@ -153,8 +165,8 @@ export function buildFrontModel(sp: SpeciesDef, opts: ModelOptions): CompanionMo
       if (side > 0) {
         hand.x += (opts.paw ?? 0) * 4
         hand.y -= (opts.paw ?? 0) * 12
-        hand.x += (82 - hand.x) * (opts.swat ?? 0)
-        hand.y += (80 - hand.y) * (opts.swat ?? 0)
+        hand.x += (handTarget.x - hand.x) * (opts.swat ?? 0)
+        hand.y += (handTarget.y - hand.y) * (opts.swat ?? 0)
       }
       parts.push({
         id: side < 0 ? 'legFarFront' : 'legNearFront',
@@ -164,8 +176,8 @@ export function buildFrontModel(sp: SpeciesDef, opts: ModelOptions): CompanionMo
       if (side > 0) {
         foot.x += (opts.paw ?? 0) * 7
         foot.y -= (opts.paw ?? 0) * 14
-        foot.x += (82 - foot.x) * (opts.swat ?? 0)
-        foot.y += (80 - foot.y) * (opts.swat ?? 0)
+        foot.x += (handTarget.x - foot.x) * (opts.swat ?? 0)
+        foot.y += (handTarget.y - foot.y) * (opts.swat ?? 0)
       }
       parts.push({
         id: side < 0 ? 'legNearBack' : 'legNearFront',
@@ -189,5 +201,10 @@ export function buildFrontModel(sp: SpeciesDef, opts: ModelOptions): CompanionMo
       opts
     )
   )
+  // The reaching paw/wing must remain visible in front of the cheek and ears.
+  if (opts.swat) {
+    const arm = parts.findLastIndex((part) => part.id === (bird ? 'wing' : 'legNearFront'))
+    if (arm >= 0) parts.push(...parts.splice(arm, 1))
+  }
   return parts
 }

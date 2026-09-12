@@ -26,6 +26,7 @@ export interface NotificationAppearedPayload {
   id: string
   /** Toast rectangle in overlay-local CSS px. */
   rect: { x: number; y: number; width: number; height: number }
+  closePoint?: { x: number; y: number }
   /** True if the toast exposes actions (reply/buttons). */
   interactive: boolean
 }
@@ -116,6 +117,15 @@ const api = {
    */
   closeNotification(id: string): void {
     ipcRenderer.send('notification:close', id)
+  },
+
+  /** Keep the pet's overlay in front while it performs a notification swat. */
+  raiseForNotification(): void {
+    ipcRenderer.send('overlay:raise-for-notification')
+  },
+
+  setNotificationInteraction(active: boolean): void {
+    ipcRenderer.send('overlay:notification-interaction', active)
   },
 
   /**

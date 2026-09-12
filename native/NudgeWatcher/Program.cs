@@ -43,6 +43,16 @@ internal static class Program
     [MTAThread]
     static int Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--window-layer")
+        {
+            try
+            {
+                nint window = (nint)long.Parse(args[1], System.Globalization.CultureInfo.InvariantCulture);
+                WriteJsonLine(System.Text.Json.JsonSerializer.Serialize(WindowLayerInfo.Read(window)));
+                return 0;
+            }
+            catch (Exception ex) { Console.Error.WriteLine(ex.Message); return 1; }
+        }
         // Separate mode: never starts notification detection or requests access.
         if (args.Length == 1 && args[0] == "--audio-meter") return AudioMeter.Run();
         CliOptions opts = CliOptions.Parse(args);

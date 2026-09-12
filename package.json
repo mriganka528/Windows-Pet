@@ -17,6 +17,7 @@
     "watcher:publish": "node scripts/publish-watcher.mjs",
     "dist:win": "npm run build && npm run watcher:publish && npx --yes --package=electron-builder@26.0.12 electron-builder --win nsis --x64 --publish never",
     "pack:win": "npm run build && npm run watcher:publish && npx --yes --package=electron-builder@26.0.12 electron-builder --win --x64 --dir --publish never",
+    "prepare:uiaccess": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-uiaccess.ps1",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",

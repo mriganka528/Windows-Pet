@@ -12,10 +12,10 @@
 //   landing — short "recover" beat after being dropped -> idle
 //   alert   — a toast just appeared: a brief "notice" beat (ears up / "!") before
 //             trotting over -> travel
-//   travel  — DASHING (faster than wander) to the spot beside the toast; on
+//   travel  — DASHING (faster than wander) to the toast's close button; on
 //             arrival -> interact
-//   interact— the "nudge": hold beside the toast being agitated until it closes
-//             (NOTIFICATION_CLOSED) or a safety timeout elapses -> idle
+//   interact— the "nudge": reach for its cross until it closes or times out,
+//             then handle the next queued notification or finish the reaction
 //   dance   — music is playing: bop in place (the sprite animates itself) until
 //             the music stops -> idle. Entered only from idle/wander so it never
 //             interrupts a drag or a notification reaction; a toast appearing
@@ -33,10 +33,9 @@
 // than making MUSIC_START jump straight to dance — so music starting mid-drag or
 // mid-nudge is deferred until the pup is free, instead of yanking it away.
 //
-// The notification flow is entered from idle/wander/dance only (a new toast is
-// ignored while dragging or already reacting, so the pup never thrashes).
-// NOTIFICATION_CLOSED for the toast we're currently reacting to unwinds us
-// straight back to idle from any of alert/travel/interact.
+// New toasts queue while a reaction is running. Closing the current toast (or
+// reaching its safety timeout) starts the next one before any normal movement.
+// Dragging and sleep still take priority and cancel the notification batch.
 //
 // The machine is pure logic: actions mutate context (position/target/facing),
 // but nothing here touches the DOM. The React layer runs a requestAnimationFrame
@@ -69,6 +68,8 @@ export interface NotificationTargetInfo {
   id: string
   /** Toast rectangle in overlay-local CSS px (already coordinate-converted). */
   rect: Rect
+  /** Measured centre of the native dismiss button, when Windows exposes it. */
+  closePoint?: Vec2
   /** Whether the toast exposes actions (reply/buttons). Carried through as
    *  metadata only: auto-close mode dismisses every toast (the user's chosen
    *  scope is "close everything"), so this does NOT gate the paw-close. */
@@ -95,6 +96,8 @@ export interface CompanionContext {
   landRemaining: number
   /** The toast currently being reacted to, or null when just wandering. */
   notification: NotificationTargetInfo | null
+  /** Notifications waiting their turn, in arrival order, without duplicate ids. */
+  pendingNotifications: NotificationTargetInfo[]
   /** Seconds remaining in the "notice" beat before trotting to the toast. */
   alertRemaining: number
   /** Seconds remaining in the nudge hold before giving up (safety timeout). */
@@ -120,7 +123,13 @@ export type CompanionEvent =
   | { type: 'PICK_UP' }
   | { type: 'DRAG_MOVE'; position: Vec2 }
   | { type: 'DROP' }
-  | { type: 'NOTIFICATION_APPEARED'; id: string; rect: Rect; interactive: boolean }
+  | {
+      type: 'NOTIFICATION_APPEARED'
+      id: string
+      rect: Rect
+      closePoint?: Vec2
+      interactive: boolean
+    }
   | { type: 'NOTIFICATION_CLOSED'; id: string }
   | { type: 'MUSIC_START' }
   | { type: 'MUSIC_STOP' }
@@ -172,12 +181,39 @@ function initialContext(input: CompanionInput): CompanionContext {
     restRemaining: REST_MIN,
     landRemaining: 0,
     notification: null,
+    pendingNotifications: [],
     alertRemaining: 0,
     interactRemaining: 0,
     musicActive: false,
     webcamActive: false,
     posedThisSession: false,
     poseRemaining: 0
+  }
+}
+
+function targetForNotification(
+  context: CompanionContext,
+  notification: NotificationTargetInfo
+): Vec2 {
+  return notificationTarget(
+    notification.rect,
+    context.bounds,
+    context.config,
+    notification.closePoint
+  )
+}
+
+function notificationAlert(
+  context: CompanionContext,
+  notification: NotificationTargetInfo
+): Partial<CompanionContext> {
+  const target = targetForNotification(context, notification)
+  return {
+    notification,
+    speed: 0,
+    target,
+    facing: facingFromDelta(target.x - context.position.x, context.facing),
+    alertRemaining: ALERT_TIME
   }
 }
 
@@ -192,7 +228,9 @@ export const companionMachine = setup({
       if (event.type !== 'SET_BOUNDS') return {}
       const target = context.sleepRequested
         ? sleepTarget(event.bounds, context.config)
-        : clampToBounds(context.target, event.bounds, context.config)
+        : context.notification
+          ? targetForNotification({ ...context, bounds: event.bounds }, context.notification)
+          : clampToBounds(context.target, event.bounds, context.config)
       return {
         bounds: event.bounds,
         position: clampToBounds(context.position, event.bounds, context.config),
@@ -213,7 +251,7 @@ export const companionMachine = setup({
       const target = context.sleepRequested
         ? sleepTarget(context.bounds, config)
         : context.notification
-          ? notificationTarget(context.notification.rect, context.bounds, config)
+          ? targetForNotification({ ...context, config }, context.notification)
           : clampToBounds(
               { x: context.target.x, y: context.target.y + delta },
               context.bounds,
@@ -335,6 +373,7 @@ export const companionMachine = setup({
     beginSleep: assign(({ context }) => ({
       sleepRequested: true,
       notification: null,
+      pendingNotifications: [],
       speed: 0,
       target: sleepTarget(context.bounds, context.config)
     })),
@@ -356,32 +395,66 @@ export const companionMachine = setup({
     // overlay-local px) already happened upstream, so event.rect is overlay-local.
     beginAlert: assign(({ context, event }) => {
       if (event.type !== 'NOTIFICATION_APPEARED') return {}
-      const target = notificationTarget(event.rect, context.bounds, context.config)
+      return notificationAlert(context, {
+        id: event.id,
+        rect: event.rect,
+        ...(event.closePoint ? { closePoint: event.closePoint } : {}),
+        interactive: event.interactive
+      })
+    }),
+    queueNotification: assign(({ context, event }) => {
+      if (event.type !== 'NOTIFICATION_APPEARED') return {}
+      const incoming = {
+        id: event.id,
+        rect: event.rect,
+        ...(event.closePoint ? { closePoint: event.closePoint } : {}),
+        interactive: event.interactive
+      }
+      const isCurrent = context.notification?.id === event.id
+      const notification = isCurrent ? incoming : context.notification
+      const pending = context.pendingNotifications
+      const pendingNotifications = isCurrent
+        ? pending
+        : pending.some((n) => n.id === event.id)
+          ? pending.map((n) => (n.id === event.id ? incoming : n))
+          : [...pending, incoming]
       return {
-        notification: { id: event.id, rect: event.rect, interactive: event.interactive },
-        speed: 0,
-        target,
-        facing: facingFromDelta(target.x - context.position.x, context.facing),
-        alertRemaining: ALERT_TIME
+        notification,
+        pendingNotifications,
+        // Refresh the current button when it moves, without replacing the
+        // active notification with a new arrival from the queue.
+        target: notification
+          ? targetForNotification({ ...context, pendingNotifications }, notification)
+          : context.target
       }
     }),
+    beginNextNotification: assign(({ context }) => {
+      const [notification, ...pendingNotifications] = context.pendingNotifications
+      if (!notification) return {}
+      return {
+        ...notificationAlert(context, notification),
+        pendingNotifications
+      }
+    }),
+    removePendingNotification: assign(({ context, event }) =>
+      event.type === 'NOTIFICATION_CLOSED'
+        ? { pendingNotifications: context.pendingNotifications.filter((n) => n.id !== event.id) }
+        : {}
+    ),
     tickAlert: assign(({ context, event }) => {
       if (event.type !== 'TICK') return {}
       return { alertRemaining: Math.max(0, context.alertRemaining - event.dt) }
     }),
-    // Arrived at the toast's close button — start the nudge hold (safety-capped
-    // countdown) and force facing 'right' so the front-pose swat reaches into the
-    // toast's TOP-RIGHT corner (the X) no matter which side we approached from.
-    // notificationTarget always parks the body up-and-left of the X, so 'right' is
-    // always the correct way to face; the front<->profile turn-squish masks the
-    // flip on arrival.
+    // Arrived at the close button. Start the safety-capped hold
+    // and face right for the front-pose swat, regardless of approach direction.
     beginInteract: assign(() => ({ interactRemaining: INTERACT_MAX, facing: 'right' as const })),
     tickInteract: assign(({ context, event }) => {
       if (event.type !== 'TICK') return {}
       return { interactRemaining: Math.max(0, context.interactRemaining - event.dt) }
     }),
-    // Forget the current toast (on close, timeout, or pick-up).
+    // Finishing one toast preserves the queue; explicit user interruptions clear it.
     clearNotification: assign(() => ({ notification: null })),
+    clearAllNotifications: assign(() => ({ notification: null, pendingNotifications: [] })),
     beginCelebrate: assign(() => ({ notification: null, celebrateRemaining: 1.3, speed: 0 })),
     tickCelebrate: assign(({ context, event }) =>
       event.type === 'TICK'
@@ -426,6 +499,10 @@ export const companionMachine = setup({
       const dy = context.target.y - context.position.y
       return Math.hypot(dx, dy) < 0.001
     },
+    needsNotificationTravel: ({ context }) =>
+      context.notification !== null &&
+      Math.hypot(context.target.x - context.position.x, context.target.y - context.position.y) >=
+        0.001,
     landingDone: ({ context }) => context.landRemaining <= 0,
     alertDone: ({ context }) => context.alertRemaining <= 0,
     interactDone: ({ context }) => context.interactRemaining <= 0,
@@ -434,6 +511,7 @@ export const companionMachine = setup({
     // while stale ids (or closes that arrive when we're just wandering) are ignored.
     closingCurrent: ({ context, event }) =>
       event.type === 'NOTIFICATION_CLOSED' && context.notification?.id === event.id,
+    hasPendingNotifications: ({ context }) => context.pendingNotifications.length > 0,
     musicActive: ({ context }) => context.musicActive,
     notMusicActive: ({ context }) => !context.musicActive,
     // Enter the pose flow only on the rising edge of a camera session: the camera
@@ -455,9 +533,13 @@ export const companionMachine = setup({
   on: {
     SET_BOUNDS: { actions: 'updateBounds' },
     SET_CONFIG: { actions: 'updateConfig' },
-    PICK_UP: { target: '.dragging', actions: ['clearNotification', 'wake'] },
+    PICK_UP: { target: '.dragging', actions: ['clearAllNotifications', 'wake'] },
     SLEEP: { target: '.sleepTravel', actions: 'beginSleep' },
-    NOTIFICATION_CLOSED: { guard: 'closingCurrent', target: '.idle', actions: 'clearNotification' },
+    NOTIFICATION_APPEARED: { actions: 'queueNotification' },
+    NOTIFICATION_CLOSED: [
+      { guard: 'closingCurrent', target: '.idle', actions: 'clearNotification' },
+      { actions: 'removePendingNotification' }
+    ],
     // Music on/off just flip the flag from any state; the actual hop into/out of
     // `dance` is handled by the guarded TICK in idle/wander/dance, so we never
     // interrupt a drag or a notification reaction mid-flow.
@@ -497,6 +579,11 @@ export const companionMachine = setup({
       }
     },
     idle: {
+      always: {
+        guard: 'hasPendingNotifications',
+        target: 'alert',
+        actions: 'beginNextNotification'
+      },
       entry: 'resetRest',
       on: {
         TICK: [
@@ -540,7 +627,7 @@ export const companionMachine = setup({
         TICK: [{ guard: 'alertDone', target: 'travel' }, { actions: 'tickAlert' }]
       }
     },
-    // Walk to the spot beside the toast. Uses the FAST stepper (tickTravel) so
+    // Walk to the toast's close button. Uses the FAST stepper (tickTravel) so
     // the pup dashes over at TRAVEL_SPEED_SCALE× wander speed, then hands off to
     // the paw-swat in `interact` on arrival.
     travel: {
@@ -551,9 +638,11 @@ export const companionMachine = setup({
         ]
       }
     },
-    // The nudge: hold beside the toast until it closes (root NOTIFICATION_CLOSED)
+    // The nudge: paw the cross until the toast closes (root NOTIFICATION_CLOSED)
     // or the safety timeout elapses.
     interact: {
+      // If the current button moves, cancel the swat and reach its new position.
+      always: { guard: 'needsNotificationTravel', target: 'travel' },
       on: {
         NOTIFICATION_CLOSED: {
           guard: 'closingCurrent',
@@ -567,6 +656,13 @@ export const companionMachine = setup({
       }
     },
     celebrate: {
+      // Only celebrate the end of the batch. This immediate transition prevents
+      // wandering, dancing or posing between notifications, even at one location.
+      always: {
+        guard: 'hasPendingNotifications',
+        target: 'alert',
+        actions: 'beginNextNotification'
+      },
       on: {
         TICK: [
           { guard: 'celebrateDone', target: 'wander', actions: 'chooseTarget' },

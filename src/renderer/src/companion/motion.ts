@@ -10,6 +10,7 @@
 // rests when walking along the taskbar edge.
 
 import type { SleepPosition } from '../../../shared/settings'
+import { NOTIFICATION_PAW } from './notificationPose'
 
 export interface Vec2 {
   x: number
@@ -234,40 +235,42 @@ export function stepToward(
 
 /**
  * The dismiss (X / close) button sits at a Windows toast's TOP-RIGHT corner.
- * These insets (overlay-local CSS px) put the aim point at that button's centre
- * for a typical Win11 toast — the exact spot the pet reaches its paw to tap shut.
+ * This inset (overlay-local CSS px) aligns the pet's paw horizontally with it.
  */
 export const CLOSE_INSET_X = 22
 export const CLOSE_INSET_Y = 20
 
 /**
- * Where the pet's raised front paw lands as a FRACTION of the sprite box, facing
- * right. At the swat's peak the front leg's foot swings to roughly (0.82, 0.80)
- * of the box (see the swat transforms in SpriteCanvas). We offset the body
- * up-and-left by this so the paw *tip* reaches the X, instead of the body centre
- * sitting on it.
+ * Horizontal position of the raised front paw within the sprite box.
  */
-export const PAW_CONTACT_FX = 0.82
-export const PAW_CONTACT_FY = 0.8
+export const PAW_CONTACT_FX = NOTIFICATION_PAW.x / 100
+export const PAW_CONTACT_FY = NOTIFICATION_PAW.y / 100
+
+export function notificationClosePoint(rect: Rect, measured?: Vec2): Vec2 {
+  return measured ?? { x: rect.x + rect.width - CLOSE_INSET_X, y: rect.y + CLOSE_INSET_Y }
+}
 
 /**
- * Where the sprite should stand to paw a notification's close button shut. Given
- * the toast's rectangle (overlay-local px), return a top-left target that lands
- * the pet's front paw right on the toast's TOP-RIGHT X, clamped so the whole body
- * stays on-screen.
- *
- * The pet is placed up-and-left of the X (by PAW_CONTACT_F* × sprite size) and
- * always made to face right on arrival (see machine `beginInteract`), so its
- * front-right leg reaches into the corner and bats the X. Pure and deterministic
- * so it's unit-testable.
+ * Overlap the message and place the raised paw on its close button. Window
+ * ordering is managed separately; moving above a banner is not a layering fix.
+ * Queued banners do not move the contact point of the current notification.
  */
-export function notificationTarget(rect: Rect, bounds: Bounds, cfg: WanderConfig): Vec2 {
+export function notificationTarget(
+  rect: Rect,
+  bounds: Bounds,
+  cfg: WanderConfig,
+  closePoint?: Vec2
+): Vec2 {
   const sz = cfg.spriteSize
-  const closeX = rect.x + rect.width - CLOSE_INSET_X
-  const closeY = rect.y + CLOSE_INSET_Y
-  const rawX = Math.round(closeX - PAW_CONTACT_FX * sz)
-  const rawY = Math.round(closeY - PAW_CONTACT_FY * sz)
-  return clampToBounds({ x: rawX, y: rawY }, bounds, cfg)
+  const close = notificationClosePoint(rect, closePoint)
+  return clampToBounds(
+    {
+      x: close.x - PAW_CONTACT_FX * sz,
+      y: close.y - PAW_CONTACT_FY * sz
+    },
+    bounds,
+    cfg
+  )
 }
 
 /**

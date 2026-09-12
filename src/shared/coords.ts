@@ -47,6 +47,15 @@ export interface Point2 {
   y: number
 }
 
+export function screenPointToLocalPoint(
+  point: Point2,
+  overlayOriginDip: Point2,
+  scaleFactor: number
+): Point2 {
+  const scale = scaleFactor > 0 ? scaleFactor : 1
+  return { x: point.x / scale - overlayOriginDip.x, y: point.y / scale - overlayOriginDip.y }
+}
+
 /**
  * Convert a watcher screen rectangle (physical px) into overlay-window-local CSS
  * px. `scaleFactor` is the display's DPI scale (e.g. 1.0, 1.25, 1.5);

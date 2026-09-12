@@ -11,6 +11,7 @@ const result = spawnSync(
   'dotnet',
   [
     'publish',
+    ...(process.argv.includes('--no-restore') ? ['--no-restore'] : []),
     join(root, 'native', 'NudgeWatcher', 'NudgeWatcher.csproj'),
     '--configuration',
     'Release',

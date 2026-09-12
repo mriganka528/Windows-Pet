@@ -70,6 +70,8 @@ internal sealed class NotificationListenerDetector : IDisposable
 
     // Toasts we've reported: key = notification id (uint as string), value = app name.
     readonly ConcurrentDictionary<string, string> _tracked = new();
+    readonly ConcurrentDictionary<string, ToastGeometry> _reportedGeometry = new();
+    readonly ToastGeometryReader _geometryReader = new();
 
     // Toasts linger for seconds; polling this often notices them promptly without busy-spinning.
     const int PollIntervalMs = 750;
@@ -116,6 +118,7 @@ internal sealed class NotificationListenerDetector : IDisposable
         _loop = null;
         _ready = false;
         _tracked.Clear();
+        _reportedGeometry.Clear();
     }
 
     public void Dispose() => Stop();
@@ -211,20 +214,36 @@ internal sealed class NotificationListenerDetector : IDisposable
         IReadOnlyList<UserNotification> notes =
             await _listener.GetNotificationsAsync(NotificationKinds.Toast);
 
+        bool needsGeometry = _reportedGeometry.Count > 0 || notes.Any(n =>
+            !_tracked.ContainsKey(n.Id.ToString(CultureInfo.InvariantCulture)));
+        ToastGeometry? measured = needsGeometry ? await _geometryReader.ReadAsync() : null;
         var currentIds = new HashSet<string>();
         foreach (UserNotification n in notes)
         {
             string id = n.Id.ToString(CultureInfo.InvariantCulture); // n.Id is a uint
             currentIds.Add(id);
 
-            if (_tracked.ContainsKey(id)) continue; // already reported
+            if (_tracked.TryGetValue(id, out string? existingApp))
+            {
+                // Update only notifications first observed after startup. Keep
+                // queue IDs stable while a banner slides or changes height.
+                if (measured is not null && _reportedGeometry.TryGetValue(id, out var previous) && measured != previous)
+                {
+                    _reportedGeometry[id] = measured;
+                    Appeared?.Invoke(NotificationInfo.Appeared(id, existingApp, measured.Bounds,
+                        interactive: false, hasCloseButton: true, closePoint: measured.ClosePoint));
+                }
+                continue;
+            }
 
             // PRIVACY: app identity + id ONLY. We never read n.Notification (the
             // Visual bindings holding the title/body). See the file header.
             string appName = SafeAppName(n);
             _tracked[id] = appName;
 
-            Bounds corner = CornerBounds();
+            ToastGeometry geometry = measured ?? new ToastGeometry(CornerBounds(), null);
+            _reportedGeometry[id] = geometry;
+            Bounds corner = geometry.Bounds;
             if (_verbose || _discover)
             {
                 _log($"listener: notification app={appName} id={id} -> pet target " +
@@ -234,7 +253,8 @@ internal sealed class NotificationListenerDetector : IDisposable
             // interactive=false: we don't inspect content, so we never treat a toast
             // as "has a reply box" — auto-close scope is "close everything" anyway.
             // hasCloseButton=true: RemoveNotification can always dismiss it.
-            Appeared?.Invoke(NotificationInfo.Appeared(id, appName, corner, interactive: false, hasCloseButton: true));
+            Appeared?.Invoke(NotificationInfo.Appeared(id, appName, corner, interactive: false,
+                hasCloseButton: true, closePoint: geometry.ClosePoint));
         }
 
         // Closure: any tracked id no longer present has been dismissed (by the user,
@@ -244,6 +264,7 @@ internal sealed class NotificationListenerDetector : IDisposable
             if (currentIds.Contains(kv.Key)) continue;
             if (_tracked.TryRemove(kv.Key, out _))
             {
+                _reportedGeometry.TryRemove(kv.Key, out _);
                 Closed?.Invoke(NotificationInfo.Closed(kv.Key));
                 if (_verbose) _log($"listener: notification id={kv.Key} gone — closed.");
             }
@@ -329,18 +350,22 @@ internal sealed class NotificationListenerDetector : IDisposable
 
     /// <summary>
     /// A synthetic target rect in the bottom-right corner of the primary display,
-    /// where Windows 11 shows toasts. The exact size doesn't matter — it's just
-    /// where the pet walks to and swats. Physical pixels (DPI-correct).
+    /// where Windows 11 shows toasts. The API provides no banner rectangle, so
+    /// use it only when live window/button geometry is unavailable. Dimensions and
+    /// margins are DIPs, converted to physical pixels to match the pipe schema.
     /// </summary>
     static Bounds CornerBounds()
     {
-        (int w, int h) = NativeWindows.PrimaryScreenSize();
+        Bounds workArea = NativeWindows.PrimaryWorkArea();
+        double scale = NativeWindows.PrimaryScaleFactor();
         const int toastW = 360;      // ~standard Win11 toast width
-        const int toastH = 170;      // ~standard toast height
+        const int toastH = 170;      // fallback only; prefer the live dismiss button
         const int rightMargin = 24;  // toasts sit a little in from the edge
-        const int bottomMargin = 64; // ...and above the taskbar
-        double x = Math.Max(0, w - toastW - rightMargin);
-        double y = Math.Max(0, h - toastH - bottomMargin);
-        return new Bounds(x, y, toastW, toastH);
+        const int bottomMargin = 16; // gap above the actual taskbar work-area edge
+        double width = toastW * scale;
+        double height = toastH * scale;
+        double x = Math.Max(workArea.X, workArea.X + workArea.Width - width - rightMargin * scale);
+        double y = Math.Max(workArea.Y, workArea.Y + workArea.Height - height - bottomMargin * scale);
+        return new Bounds(x, y, width, height);
     }
 }

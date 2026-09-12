@@ -29,6 +29,7 @@ export interface WatcherAppeared {
   id: string
   appId?: string
   screenRect: { x: number; y: number; width: number; height: number }
+  screenClosePoint?: { x: number; y: number }
   interactive: boolean
   hasCloseButton: boolean
 }
@@ -128,7 +129,7 @@ export class NotificationWatcher {
   private resolveExe(): string | null {
     // 1) explicit override (dev/testing): point at any built NudgeWatcher.exe.
     const override = process.env['NUDGE_WATCHER_EXE']
-    if (override && existsSync(override)) return override
+    if (!app.isPackaged && override && existsSync(override)) return override
 
     // 2) packaged app: bundled under resources/watcher/ (see Phase 7 packaging).
     if (app.isPackaged) {
@@ -314,10 +315,24 @@ export class NotificationWatcher {
       ) {
         return
       }
+      const point = msg.closePoint as { X?: unknown; Y?: unknown } | null | undefined
+      const screenClosePoint =
+        point &&
+        typeof point.X === 'number' &&
+        typeof point.Y === 'number' &&
+        Number.isFinite(point.X) &&
+        Number.isFinite(point.Y) &&
+        point.X >= X &&
+        point.X <= X + Width &&
+        point.Y >= Y &&
+        point.Y <= Y + Height
+          ? { x: point.X, y: point.Y }
+          : undefined
       this.opts.onAppeared({
         id,
         appId: typeof msg.appId === 'string' ? msg.appId : undefined,
         screenRect: { x: X, y: Y, width: Width, height: Height },
+        screenClosePoint,
         interactive: msg.interactive === true,
         hasCloseButton: msg.hasCloseButton === true
       })

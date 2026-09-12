@@ -42,6 +42,8 @@ test.beforeAll(async () => {
       )
     ) as Record<string, string>
   })
+  const overlay = await app.firstWindow()
+  await expect(overlay.locator('.sprite-container canvas')).toBeVisible()
 })
 
 test.afterAll(async () => {
@@ -70,6 +72,38 @@ test('companion sprite is present in the DOM', async () => {
   const win = await app.firstWindow()
   const sprite = win.locator('.sprite-container canvas')
   await expect(sprite).toBeVisible()
+})
+
+test('notification swats raise the overlay without taking focus', async () => {
+  const result = await app.evaluate(({ BrowserWindow, ipcMain }) => {
+    const win = BrowserWindow.getAllWindows()[0]
+    const moveTop = win.moveTop
+    let raises = 0
+    win.moveTop = () => {
+      raises++
+      moveTop.call(win)
+    }
+    try {
+      const focusedBefore = BrowserWindow.getFocusedWindow()?.id ?? null
+      win.setAlwaysOnTop(false)
+      ipcMain.emit('overlay:raise-for-notification', { sender: {} })
+      const ignoredOtherSender = raises === 0 && !win.isAlwaysOnTop()
+      ipcMain.emit('overlay:raise-for-notification', { sender: win.webContents })
+      return {
+        ignoredOtherSender,
+        raises,
+        alwaysOnTop: win.isAlwaysOnTop(),
+        focusedBefore,
+        focusedAfter: BrowserWindow.getFocusedWindow()?.id ?? null
+      }
+    } finally {
+      win.moveTop = moveTop
+    }
+  })
+  expect(result.ignoredOtherSender).toBe(true)
+  expect(result.raises).toBe(1)
+  expect(result.alwaysOnTop).toBe(true)
+  expect(result.focusedAfter).toBe(result.focusedBefore)
 })
 
 test('renderer receives the native work area in overlay coordinates', async () => {

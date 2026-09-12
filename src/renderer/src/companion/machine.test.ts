@@ -4,6 +4,8 @@ import { companionMachine } from './machine'
 import {
   DEFAULT_WANDER,
   notificationTarget,
+  notificationClosePoint,
+  PAW_CONTACT_FY,
   webcamTarget,
   TRAVEL_SPEED_SCALE,
   type Bounds,
@@ -219,6 +221,187 @@ describe('companionMachine — notification flow (Phase 5)', () => {
     expect(travelStep).toBeGreaterThan(0)
     expect(travelStep).toBeLessThan(cfg.speed * TRAVEL_SPEED_SCALE * dt)
     expect(travelStep).toBeGreaterThan(wanderStep)
+  })
+})
+
+describe('notification batches', () => {
+  const toast: Rect = { x: 620, y: 360, width: 360, height: 190 }
+  function appear(a: ReturnType<typeof boot>, id: string, rect = toast) {
+    a.send({ type: 'NOTIFICATION_APPEARED', id, rect, interactive: true })
+  }
+
+  it('handles a simultaneous burst in arrival order and celebrates only after the last close', () => {
+    const a = boot()
+    const ids = ['first', 'second', 'third', 'fourth']
+    for (const id of ids) appear(a, id)
+    const observed: unknown[] = []
+    const subscription = a.subscribe((snapshot) => observed.push(snapshot.value))
+    a.send({ type: 'MUSIC_START' })
+    a.send({ type: 'WEBCAM_ON' })
+
+    for (const [index, id] of ids.entries()) {
+      tickUntil(a, (actor) => actor.getSnapshot().matches('interact'))
+      expect(a.getSnapshot().value).toBe('interact')
+      expect(a.getSnapshot().context.notification?.id).toBe(id)
+      expect(a.getSnapshot().context.pendingNotifications.map((n) => n.id)).toEqual(
+        ids.slice(index + 1)
+      )
+      expect(
+        observed.every((value) => ['alert', 'travel', 'interact'].includes(String(value)))
+      ).toBe(true)
+      a.send({ type: 'NOTIFICATION_CLOSED', id })
+    }
+
+    expect(a.getSnapshot().value).toBe('celebrate')
+    expect(a.getSnapshot().context.notification).toBeNull()
+    expect(a.getSnapshot().context.pendingNotifications).toEqual([])
+    tickUntil(a, (actor) => actor.getSnapshot().matches('wander'))
+    expect(a.getSnapshot().value).toBe('wander')
+    subscription.unsubscribe()
+    a.stop()
+  })
+
+  it.each(['alert', 'travel', 'interact'] as const)(
+    'queues arrivals during %s without changing the current reaction',
+    (phase) => {
+      const a = boot()
+      appear(a, 'first')
+      tickUntil(a, (actor) => actor.getSnapshot().matches(phase))
+      const before = a.getSnapshot()
+      appear(a, 'second')
+      expect(a.getSnapshot().value).toBe(phase)
+      expect(a.getSnapshot().context.notification?.id).toBe('first')
+      expect(a.getSnapshot().context.target).toEqual(before.context.target)
+      expect(a.getSnapshot().context.position).toEqual(before.context.position)
+      a.send({ type: 'NOTIFICATION_CLOSED', id: 'first' })
+      expect(a.getSnapshot().value).toBe('alert')
+      expect(a.getSnapshot().context.notification?.id).toBe('second')
+      tickUntil(a, (actor) => actor.getSnapshot().matches('interact'))
+      expect(a.getSnapshot().context.position).toEqual(
+        notificationTarget(toast, bounds, before.context.config)
+      )
+      a.stop()
+    }
+  )
+
+  it.each(['alert', 'travel', 'interact'] as const)(
+    'keeps aiming at the current cross when a higher banner arrives during %s',
+    (phase) => {
+      const a = boot()
+      appear(a, 'first')
+      tickUntil(a, (actor) => actor.getSnapshot().matches(phase))
+      const before = a.getSnapshot()
+      const higher = { ...toast, y: 140 }
+      appear(a, 'second', higher)
+      expect(a.getSnapshot().context.notification?.id).toBe('first')
+      expect(a.getSnapshot().context.position).toEqual(before.context.position)
+      expect(a.getSnapshot().value).toBe(phase)
+      expect(a.getSnapshot().context.target).toEqual(before.context.target)
+      tickUntil(a, (actor) => actor.getSnapshot().matches('interact'))
+      expect(
+        a.getSnapshot().context.position.y + before.context.config.spriteSize * PAW_CONTACT_FY
+      ).toBeCloseTo(notificationClosePoint(toast).y)
+      a.send({ type: 'NOTIFICATION_CLOSED', id: 'first' })
+      expect(a.getSnapshot().context.notification?.id).toBe('second')
+      tickUntil(a, (actor) => actor.getSnapshot().matches('interact'))
+      a.send({ type: 'NOTIFICATION_CLOSED', id: 'second' })
+      expect(a.getSnapshot().value).toBe('celebrate')
+      a.stop()
+    }
+  )
+
+  it('follows updated banner geometry without dropping the active toast or duplicating it', () => {
+    const a = boot()
+    appear(a, 'first')
+    appear(a, 'second')
+    tickUntil(a, (actor) => actor.getSnapshot().matches('interact'))
+    const moved = { ...toast, y: 120 }
+    appear(a, 'first', moved)
+    expect(a.getSnapshot().value).toBe('travel')
+    expect(a.getSnapshot().context.notification).toMatchObject({ id: 'first', rect: moved })
+    expect(a.getSnapshot().context.pendingNotifications.map((n) => n.id)).toEqual(['second'])
+    tickUntil(a, (actor) => actor.getSnapshot().matches('interact'))
+    expect(
+      a.getSnapshot().context.position.y +
+        a.getSnapshot().context.config.spriteSize * PAW_CONTACT_FY
+    ).toBeCloseTo(notificationClosePoint(moved).y)
+    a.stop()
+  })
+
+  it('removes a waiting notification that closes early and ignores stale closes', () => {
+    const a = boot()
+    for (const id of ['first', 'gone', 'last']) appear(a, id)
+    tickUntil(a, (actor) => actor.getSnapshot().matches('interact'))
+    a.send({ type: 'NOTIFICATION_CLOSED', id: 'gone' })
+    a.send({ type: 'NOTIFICATION_CLOSED', id: 'unknown' })
+    expect(a.getSnapshot().value).toBe('interact')
+    expect(a.getSnapshot().context.notification?.id).toBe('first')
+    expect(a.getSnapshot().context.pendingNotifications.map((n) => n.id)).toEqual(['last'])
+    a.send({ type: 'NOTIFICATION_CLOSED', id: 'first' })
+    a.send({ type: 'NOTIFICATION_CLOSED', id: 'first' })
+    expect(a.getSnapshot().context.notification?.id).toBe('last')
+    expect(a.getSnapshot().value).toBe('alert')
+    a.stop()
+  })
+
+  it('deduplicates active and waiting ids while keeping the latest queued geometry', () => {
+    const a = boot()
+    appear(a, 'first')
+    tick(a, 1)
+    const remaining = a.getSnapshot().context.alertRemaining
+    appear(a, 'first')
+    appear(a, 'second')
+    appear(a, 'third')
+    const moved = { ...toast, y: 200 }
+    appear(a, 'second', moved)
+    expect(a.getSnapshot().context.alertRemaining).toBe(remaining)
+    expect(a.getSnapshot().context.pendingNotifications.map((n) => n.id)).toEqual([
+      'second',
+      'third'
+    ])
+    a.send({ type: 'NOTIFICATION_CLOSED', id: 'first' })
+    expect(a.getSnapshot().context.notification).toMatchObject({ id: 'second', rect: moved })
+    a.stop()
+  })
+
+  it('continues the batch when a close acknowledgement times out', () => {
+    const a = boot()
+    appear(a, 'stuck')
+    appear(a, 'next')
+    tickUntil(a, (actor) => actor.getSnapshot().matches('interact'))
+    tickUntil(a, (actor) => actor.getSnapshot().context.notification?.id === 'next')
+    expect(a.getSnapshot().value).toBe('alert')
+    expect(a.getSnapshot().context.notification?.id).toBe('next')
+    expect(a.getSnapshot().context.pendingNotifications).toEqual([])
+    a.stop()
+  })
+
+  it.each(['PICK_UP', 'SLEEP'] as const)(
+    '%s cancels both the current toast and the queue',
+    (type) => {
+      const a = boot()
+      appear(a, 'first')
+      appear(a, 'second')
+      a.send({ type })
+      a.send({ type: 'NOTIFICATION_CLOSED', id: 'first' })
+      expect(a.getSnapshot().context.notification).toBeNull()
+      expect(a.getSnapshot().context.pendingNotifications).toEqual([])
+      expect(a.getSnapshot().value).toBe(type === 'SLEEP' ? 'sleepTravel' : 'dragging')
+      a.stop()
+    }
+  )
+
+  it('retains notifications arriving during the landing beat', () => {
+    const a = boot()
+    a.send({ type: 'PICK_UP' })
+    a.send({ type: 'DROP' })
+    appear(a, 'first')
+    appear(a, 'second')
+    expect(a.getSnapshot().value).toBe('landing')
+    tickUntil(a, (actor) => actor.getSnapshot().matches('alert'))
+    expect(a.getSnapshot().context.notification?.id).toBe('first')
+    expect(a.getSnapshot().context.pendingNotifications.map((n) => n.id)).toEqual(['second'])
+    a.stop()
   })
 })
 

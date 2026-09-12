@@ -6,7 +6,12 @@ import { facesFront } from './companion/presentation'
 import { speciesWithCoat } from './companion/coats'
 import { EffectsCanvas, type EffectsHandle } from './companion/EffectsCanvas'
 import { useSystemAudio } from './companion/useSystemAudio'
-import { DEFAULT_WANDER, type Vec2, type WanderConfig } from './companion/motion'
+import {
+  DEFAULT_WANDER,
+  notificationClosePoint,
+  type Vec2,
+  type WanderConfig
+} from './companion/motion'
 import { initialMood, reduceMood, expressionOf, type Mood, type MoodEvent } from './companion/mood'
 import { wanderConfigFor, baseMoodFor, energyFor, paletteFor } from './companion/appearance'
 import { speciesFor, type SpeciesDef } from './companion/species'
@@ -39,11 +44,6 @@ import {
 const HIT_PADDING = 8
 // Pointer travel (px) that turns a press into a drag; below it, a release = pet.
 const DRAG_THRESHOLD = 5
-// The paw-swat one-shot in SpriteCanvas runs over SWAT_TIME (0.5s) with a sine
-// envelope, so the paw is fully forward at the half-way point (~250ms). In
-// auto-close mode we ask main to dismiss the toast right then, so it disappears
-// exactly as the paw "connects" — cause and effect line up on screen.
-const SWAT_PEAK_MS = 250
 
 export default function App(): React.JSX.Element {
   const [state, send, actorRef] = useMachine(companionMachine, {
@@ -132,16 +132,19 @@ export default function App(): React.JSX.Element {
   const refreshHitTestRef = useRef<() => void>(() => {})
   const lastConfigRef = useRef<WanderConfig>(DEFAULT_WANDER)
 
-  // The toast we're currently reacting to, mirrored so the auto-close effect can
-  // read the id at the swat's peak without re-subscribing as context changes.
-  const notifIdRef = useRef<string | null>(null)
-  notifIdRef.current = state.context.notification?.id ?? null
+  // Key each swat by notification id as well as phase, including queued toasts
+  // that share the same target and arrive in the same React render batch.
+  const notificationId = state.context.notification?.id ?? null
+  const closeRequestedIdRef = useRef<string | null>(null)
+  const swatSequenceRef = useRef(0)
+  const activeSwatRef = useRef<{ id: string; nonce: number } | null>(null)
 
   // Phase 5 reaction phases, derived for the sustain effects below. Each boolean
   // stays constant across ticks within a phase, so effects keyed on them fire on
   // entry/exit only (not every frame).
   const reacting = state.matches('alert') || state.matches('travel') || state.matches('interact')
   const interacting = state.matches('interact')
+  const autoClosing = interacting && !pausedRef.current && behaviorModeRef.current === 'autoClose'
   const wasReactingRef = useRef(false)
   // Feature 3: holding the photogenic webcam pose. Declared here with the other
   // emitter-driving phases (not down with the render-only flags) so the sparkle
@@ -298,14 +301,20 @@ export default function App(): React.JSX.Element {
       // Never yank the pup out of a drag the user is doing. (The machine also
       // no-ops NOTIFICATION_APPEARED while dragging; this is the first guard.)
       if (draggingRef.current || dozingRef.current || pausedRef.current) return
-      send({ type: 'NOTIFICATION_APPEARED', id: n.id, rect: n.rect, interactive: n.interactive })
+      send({
+        type: 'NOTIFICATION_APPEARED',
+        id: n.id,
+        rect: n.rect,
+        closePoint: n.closePoint,
+        interactive: n.interactive
+      })
       welcomedRef.current = true // do not let the launch greeting override this reaction
       applyMood({ type: 'ALERT' }) // notice it immediately, even before walking over
     })
     const offClosed = subClosed((n) => {
       const current = actorRef.getSnapshot().context.notification?.id === n.id
       send({ type: 'NOTIFICATION_CLOSED', id: n.id })
-      if (current) {
+      if (current && !actorRef.getSnapshot().context.notification) {
         applyMood({ type: 'CALM' })
         effectsRef.current?.clear('anger')
       }
@@ -389,7 +398,7 @@ export default function App(): React.JSX.Element {
   }, [interacting, reacting, reducedMotion])
 
   // --- auto-close: paw the toast shut, then return to natural form ----------
-  // Only in auto-close mode. The moment the pup arrives beside the toast (enters
+  // Only in auto-close mode. The moment the pup reaches the close button (enters
   // `interact`), it throws one decisive forward paw-swat; at the swat's forward
   // peak we ask main to dismiss that specific toast. We do NOT skip "interactive"
   // toasts — the user chose "close everything" — so no gate on n.interactive here.
@@ -397,17 +406,47 @@ export default function App(): React.JSX.Element {
   // Main is the trust boundary (it re-checks mode + pause before relaying to the
   // watcher), and only the watcher-minted id crosses — never any toast text (§7).
   // If the close doesn't land, NOTIFICATION_CLOSED never arrives and the machine's
-  // own safety timeout walks the pup back to roaming, so we can't get stuck.
+  // safety timeout advances to the next queued toast, or resumes roaming.
   useEffect(() => {
-    if (!interacting || behaviorModeRef.current !== 'autoClose') return
-    const id = notifIdRef.current
-    if (!id) return
-    setSwatNonce((n) => n + 1) // fire the one-shot swat animation
-    const timer = window.setTimeout(() => {
-      window.nudge?.closeNotification(id)
-    }, SWAT_PEAK_MS)
-    return () => window.clearTimeout(timer)
-  }, [interacting])
+    if (closeRequestedIdRef.current !== notificationId) closeRequestedIdRef.current = null
+    if (!autoClosing || !notificationId || closeRequestedIdRef.current === notificationId) return
+    window.nudge?.raiseForNotification()
+    const nonce = ++swatSequenceRef.current
+    activeSwatRef.current = { id: notificationId, nonce }
+    setSwatNonce(nonce)
+    return () => {
+      activeSwatRef.current = null
+    }
+  }, [autoClosing, notificationId])
+
+  const onSwatContact = useCallback(
+    (nonce: number): void => {
+      const swat = activeSwatRef.current
+      const snapshot = actorRef.getSnapshot()
+      if (
+        !swat ||
+        swat.nonce !== nonce ||
+        !snapshot.matches('interact') ||
+        snapshot.context.notification?.id !== swat.id ||
+        closeRequestedIdRef.current === swat.id ||
+        pausedRef.current ||
+        behaviorModeRef.current !== 'autoClose'
+      )
+        return
+      closeRequestedIdRef.current = swat.id
+      window.nudge?.raiseForNotification()
+      window.nudge?.closeNotification(swat.id)
+    },
+    [actorRef]
+  )
+
+  // Raise on approach without activating the window. The signed UIAccess
+  // executable supplies the Windows band needed to appear over shell toasts.
+  const notificationInteraction = reacting && !pausedRef.current
+  useEffect(() => {
+    window.nudge?.setNotificationInteraction(notificationInteraction)
+    return () => window.nudge?.setNotificationInteraction(false)
+  }, [notificationInteraction])
 
   // --- photogenic sparkles: twinkle around the head while posing (Feature 3) --
   // Mirrors the sleepy-z / nudge-anger sustain emitters — a burst on entry, then
@@ -603,6 +642,16 @@ export default function App(): React.JSX.Element {
   // Bop in place while the machine is in its music `dance` state — but Pause
   // freezes everything, so a paused pup holds still even mid-song.
   const dancing = state.matches('dance') && !pausedRef.current
+  const notification = state.context.notification
+  const closePoint = notification
+    ? notificationClosePoint(notification.rect, notification.closePoint)
+    : null
+  const swatTarget = closePoint
+    ? {
+        x: ((closePoint.x - position.x) * 100) / spriteSize,
+        y: ((closePoint.y - position.y) * 100) / spriteSize
+      }
+    : undefined
 
   return (
     <div className="stage">
@@ -636,6 +685,9 @@ export default function App(): React.JSX.Element {
           frozen={pausedRef.current && !moving && !dragging && !sleeping}
           gesturing={gesturing}
           swatNonce={swatNonce}
+          swatting={autoClosing}
+          swatTarget={swatTarget}
+          onSwatContact={onSwatContact}
           dancing={dancing}
           beatNonce={beatNonce}
           danceTempo={danceTempo}

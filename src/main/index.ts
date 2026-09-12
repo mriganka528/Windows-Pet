@@ -19,7 +19,8 @@ import {
 } from './notificationWatcher'
 import { WebcamWatcher } from './webcamWatcher'
 import { SystemAudioMonitor } from './systemAudio'
-import { screenRectToLocalRect } from '../shared/coords'
+import { NotificationForeground } from './notificationForeground'
+import { screenPointToLocalPoint, screenRectToLocalRect } from '../shared/coords'
 import { MOOD_ORDER, MOOD_LABELS } from '../shared/settings'
 import type { NudgeSettings, SettingsPatch, MoodDefault } from '../shared/settings'
 
@@ -35,6 +36,7 @@ import type { NudgeSettings, SettingsPatch, MoodDefault } from '../shared/settin
 // Windows-specific gotchas are called out inline with [WIN] tags.
 
 let overlayWindow: BrowserWindow | null = null
+const notificationForeground = new NotificationForeground(() => overlayWindow)
 let settingsWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 // Set true only when the user really means to exit (tray → Quit), so closing
@@ -62,7 +64,7 @@ let audioRequested = false
 // production build that var is absent and we load the built HTML file from
 // disk. (Note: MAIN_WINDOW_VITE_DEV_SERVER_URL is an electron-FORGE convention
 // and does NOT exist here — referencing it would throw at runtime.)
-const RENDERER_DEV_URL = process.env['ELECTRON_RENDERER_URL']
+const RENDERER_DEV_URL = app.isPackaged ? undefined : process.env['ELECTRON_RENDERER_URL']
 
 function overlayGeometry(): {
   width: number
@@ -113,8 +115,8 @@ function createOverlayWindow(): void {
     hasShadow: false,
     // --- Always on top ---
     // [WIN] 'screen-saver' is the highest standard level and keeps the overlay
-    // above full-screen-ish app windows. It still sits below the actual toast
-    // notification layer, which is what we want (UI/UX §2.1).
+    // above full-screen-ish app windows. Drawing above Windows shell toasts
+    // additionally requires the signed, installed UIAccess edition.
     alwaysOnTop: true,
     // --- Taskbar / focus behavior ---
     skipTaskbar: true, // no taskbar button for the overlay
@@ -168,10 +170,12 @@ function createOverlayWindow(): void {
   })
 
   overlayWindow.on('closed', () => {
+    notificationForeground.stop()
     overlayWindow = null
     stopAudioMonitor()
   })
   overlayWindow.webContents.on('render-process-gone', stopAudioMonitor)
+  overlayWindow.webContents.on('render-process-gone', () => notificationForeground.stop())
   overlayWindow.webContents.on('did-start-loading', stopAudioMonitor)
 }
 
@@ -395,6 +399,22 @@ ipcMain.on('overlay:set-mouse-ignore', (event, ignore: boolean) => {
   }
 })
 
+function raiseOverlayForNotification(): void {
+  notificationForeground.raise()
+}
+
+ipcMain.on('overlay:raise-for-notification', (event) => {
+  if (!overlayWindow || event.sender !== overlayWindow.webContents || getSettings().runtime.paused)
+    return
+  raiseOverlayForNotification()
+})
+
+ipcMain.on('overlay:notification-interaction', (event, active: unknown) => {
+  if (!overlayWindow || event.sender !== overlayWindow.webContents || typeof active !== 'boolean')
+    return
+  notificationForeground.setActive(active && !getSettings().runtime.paused)
+})
+
 // ---------------------------------------------------------------------------
 // Companion events (main -> renderer)
 // ---------------------------------------------------------------------------
@@ -500,9 +520,13 @@ function forwardNotificationAppeared(n: WatcherAppeared): void {
     primary.scaleFactor
   )
 
+  raiseOverlayForNotification()
   win.webContents.send('notification:appeared', {
     id: n.id,
     rect,
+    closePoint: n.screenClosePoint
+      ? screenPointToLocalPoint(n.screenClosePoint, bounds, primary.scaleFactor)
+      : undefined,
     interactive: n.interactive
   })
 }
@@ -564,7 +588,7 @@ function startNotificationWatcher(): void {
 // ---------------------------------------------------------------------------
 function resolveAudioHelper(): string | null {
   const override = process.env['NUDGE_WATCHER_EXE']
-  if (override && existsSync(override)) return override
+  if (!app.isPackaged && override && existsSync(override)) return override
   if (app.isPackaged) {
     const exe = join(process.resourcesPath, 'watcher', 'NudgeWatcher.exe')
     return existsSync(exe) ? exe : null
@@ -664,6 +688,7 @@ if (!gotLock) {
 
   // Release global shortcuts, stop the watcher, and tear down the tray on exit.
   app.on('will-quit', () => {
+    notificationForeground.stop()
     globalShortcut.unregisterAll()
     // Cancel any outstanding [DEV ONLY] simulated-toast retract timers.
     for (const timer of simulatedCloseTimers.values()) clearTimeout(timer)

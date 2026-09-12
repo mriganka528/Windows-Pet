@@ -1,12 +1,23 @@
 import { test, expect, type Page } from '@playwright/test'
 import { DEFAULT_SETTINGS, type NudgeSettings, type SettingsPatch } from '../src/shared/settings'
-import type { NudgeApi } from '../src/preload'
+import type { NudgeApi, NotificationAppearedPayload } from '../src/preload'
 
 declare global {
   interface Window {
     testNudge: {
       ignored: boolean
       closed: string[]
+      raised: number
+      notificationInteraction: boolean
+      notifications: Record<string, NotificationAppearedPayload>
+      dismissals: {
+        id: string
+        bottom: number
+        state: string | null
+        pawAlpha: number
+        inFront: boolean
+        closeY: number
+      }[]
       audioEnabled: boolean
       mediaRequests: number
       emit(name: string, payload: unknown): void
@@ -30,9 +41,17 @@ async function boot(page: Page, paused = false): Promise<void> {
       window.testNudge = {
         ignored: true,
         closed: [],
+        raised: 0,
+        notificationInteraction: false,
+        notifications: {},
+        dismissals: [],
         audioEnabled: false,
         mediaRequests: 0,
         emit(name, payload) {
+          if (name === 'notification') {
+            const notification = payload as NotificationAppearedPayload
+            window.testNudge.notifications[notification.id] = notification
+          }
           for (const listener of listeners.get(name) ?? []) listener(payload)
         }
       }
@@ -79,6 +98,30 @@ async function boot(page: Page, paused = false): Promise<void> {
         },
         closeNotification(id) {
           window.testNudge.closed.push(id)
+          const pet = document.querySelector('.sprite-container')!
+          const box = pet.getBoundingClientRect()
+          const notification = window.testNudge.notifications[id]
+          const close = notification.closePoint ?? {
+            x: notification.rect.x + notification.rect.width - 22,
+            y: notification.rect.y + 20
+          }
+          const canvas = pet.querySelector('canvas')!
+          const x = Math.round(((close.x - box.x) * canvas.width) / box.width)
+          const y = Math.round(((close.y - box.y) * canvas.height) / box.height)
+          window.testNudge.dismissals.push({
+            id,
+            bottom: box.bottom,
+            state: pet.getAttribute('data-state'),
+            pawAlpha: canvas.getContext('2d')!.getImageData(x, y, 1, 1).data[3],
+            inFront: !!document.elementFromPoint(close.x, close.y)?.closest('.sprite-container'),
+            closeY: close.y
+          })
+        },
+        raiseForNotification() {
+          window.testNudge.raised++
+        },
+        setNotificationInteraction(active) {
+          window.testNudge.notificationInteraction = active
         },
         onSettingsChanged: (callback) => subscribe('settings', callback),
         onGeometryChanged: (callback) => subscribe('geometry', callback),
@@ -280,6 +323,177 @@ test('notification dash faces front to close, holds its finish, then wanders', a
   await expect(pet).toHaveAttribute('data-state', 'wander')
   await expect(canvas).toHaveAttribute('data-orientation', 'profile')
   await expect(canvas).toHaveAttribute('data-expression', 'grumpy')
+})
+
+test('closes a burst one by one with its paw drawn over the cross on the message', async ({
+  page
+}) => {
+  await boot(page)
+  await page.evaluate(async () => {
+    await window.nudge.setSettings({ behavior: { mode: 'autoClose' } })
+    const banner = document.createElement('div')
+    banner.id = 'test-banner'
+    Object.assign(banner.style, {
+      position: 'fixed',
+      left: '424px',
+      top: '300px',
+      width: '360px',
+      height: '240px',
+      background: '#263449',
+      zIndex: '1'
+    })
+    document.body.append(banner)
+    for (const id of ['first', 'second', 'gone', 'third', 'first', 'second']) {
+      window.testNudge.emit('notification', {
+        id,
+        rect: { x: 424, y: 300, width: 360, height: 240 },
+        interactive: true
+      })
+    }
+  })
+  const pet = page.locator('.sprite-container')
+  await expect.poll(() => page.evaluate(() => window.testNudge.closed)).toEqual(['first'])
+  await expect(pet).toHaveAttribute('data-state', 'interact')
+  const bannerTop = (await page.locator('#test-banner').boundingBox())!.y
+  const box = (await pet.boundingBox())!
+  expect(box.y + box.height * 0.5).toBeGreaterThan(bannerTop)
+  expect(box.y).toBeLessThan(bannerTop + 20)
+  expect(await page.evaluate(() => window.testNudge.notificationInteraction)).toBe(true)
+
+  await page.evaluate(() => {
+    window.testNudge.emit('closed', { id: 'gone' })
+    window.testNudge.emit('closed', { id: 'first' })
+  })
+  await expect.poll(() => page.evaluate(() => window.testNudge.closed)).toEqual(['first', 'second'])
+  await expect(pet).toHaveAttribute('data-state', 'interact')
+  // A new arrival during a later swat joins the same batch.
+  await page.evaluate(() => {
+    window.testNudge.emit('notification', {
+      id: 'fourth',
+      rect: { x: 424, y: 300, width: 360, height: 240 },
+      interactive: false
+    })
+    window.testNudge.emit('closed', { id: 'second' })
+  })
+  await expect
+    .poll(() => page.evaluate(() => window.testNudge.closed))
+    .toEqual(['first', 'second', 'third'])
+  await page.evaluate(() => window.testNudge.emit('closed', { id: 'third' }))
+  await expect
+    .poll(() => page.evaluate(() => window.testNudge.closed))
+    .toEqual(['first', 'second', 'third', 'fourth'])
+  const { raised, dismissals } = await page.evaluate(() => window.testNudge)
+  expect(raised).toBe(8)
+  expect(dismissals.every((n) => n.state === 'interact' && n.pawAlpha > 200 && n.inFront)).toBe(
+    true
+  )
+  await page.evaluate(() => {
+    window.testNudge.emit('closed', { id: 'fourth' })
+    document.querySelector('#test-banner')?.remove()
+  })
+  await expect(pet).toHaveAttribute('data-state', 'celebrate')
+  await expect(pet).toHaveAttribute('data-state', 'wander')
+  expect(await page.evaluate(() => window.testNudge.notificationInteraction)).toBe(false)
+})
+
+test('keeps contact with the current cross when a new banner arrives during the swat', async ({
+  page
+}) => {
+  await boot(page)
+  await page.evaluate(async () => {
+    await window.nudge.setSettings({ behavior: { mode: 'autoClose' } })
+    const pet = document.querySelector('.sprite-container')!
+    const observer = new MutationObserver(() => {
+      if (pet.getAttribute('data-state') !== 'interact') return
+      observer.disconnect()
+      // Arrive during the first swat, before its delayed close is sent.
+      window.testNudge.emit('notification', {
+        id: 'higher',
+        rect: { x: 424, y: 140, width: 360, height: 150 },
+        interactive: false
+      })
+    })
+    observer.observe(pet, { attributes: true, attributeFilter: ['data-state'] })
+    window.testNudge.emit('notification', {
+      id: 'first',
+      rect: { x: 424, y: 310, width: 360, height: 240 },
+      interactive: false
+    })
+  })
+  const pet = page.locator('.sprite-container')
+  await expect.poll(() => page.evaluate(() => window.testNudge.closed)).toEqual(['first'])
+  expect(await page.evaluate(() => window.testNudge.dismissals[0])).toMatchObject({
+    closeY: 330,
+    inFront: true
+  })
+  expect(await page.evaluate(() => window.testNudge.dismissals[0].pawAlpha)).toBeGreaterThan(200)
+  await page.evaluate(() => window.testNudge.emit('closed', { id: 'first' }))
+  await expect.poll(() => page.evaluate(() => window.testNudge.closed)).toEqual(['first', 'higher'])
+  expect(await page.evaluate(() => window.testNudge.dismissals[1])).toMatchObject({
+    closeY: 160,
+    inFront: true
+  })
+  expect(await page.evaluate(() => window.testNudge.dismissals[1].pawAlpha)).toBeGreaterThan(200)
+  await page.evaluate(() => window.testNudge.emit('closed', { id: 'higher' }))
+  await expect(pet).toHaveAttribute('data-state', 'celebrate')
+  await expect(pet).toHaveAttribute('data-state', 'wander')
+})
+
+for (const character of ['dog', 'panda', 'penguin'] as const) {
+  test(`${character} reaches a measured cross even when its body is clamped at the screen edge`, async ({
+    page
+  }) => {
+    await boot(page)
+    await page.evaluate(async (character) => {
+      await window.nudge.setSettings({
+        behavior: { mode: 'autoClose' },
+        appearance: { character, size: 'large' }
+      })
+      window.testNudge.emit('notification', {
+        id: 'measured',
+        rect: { x: 620, y: 0, width: 170, height: 190 },
+        closePoint: { x: 754, y: 17 },
+        interactive: false
+      })
+    }, character)
+    await expect.poll(() => page.evaluate(() => window.testNudge.closed)).toEqual(['measured'])
+    const [dismissal] = await page.evaluate(() => window.testNudge.dismissals)
+    expect(dismissal.closeY).toBe(17)
+    expect(dismissal.pawAlpha).toBeGreaterThan(200)
+    expect(dismissal.inFront).toBe(true)
+  })
+}
+
+test('cancels a pending swat when the user puts the pet to sleep', async ({ page }) => {
+  await boot(page)
+  await page.evaluate(async () => {
+    await window.nudge.setSettings({ behavior: { mode: 'autoClose' } })
+    for (const id of ['first', 'second'])
+      window.testNudge.emit('notification', {
+        id,
+        rect: { x: 424, y: 300, width: 360, height: 240 },
+        interactive: false
+      })
+    // Interrupt synchronously as the swat begins, before its delayed close.
+    const pet = document.querySelector('.sprite-container')!
+    const observer = new MutationObserver(() => {
+      if (pet.getAttribute('data-state') !== 'interact') return
+      observer.disconnect()
+      const rect = pet.getBoundingClientRect()
+      pet.dispatchEvent(
+        new MouseEvent('contextmenu', {
+          bubbles: true,
+          clientX: rect.x + rect.width / 2,
+          clientY: rect.y + rect.height / 2
+        })
+      )
+    })
+    observer.observe(pet, { attributes: true, attributeFilter: ['data-state'] })
+  })
+  await expect(page.locator('.sprite-container')).toHaveAttribute('data-state', 'sleeping', {
+    timeout: 10000
+  })
+  expect(await page.evaluate(() => window.testNudge.closed)).toEqual([])
 })
 
 test('webcam reaction shows a cute front face and then resumes roaming', async ({ page }) => {

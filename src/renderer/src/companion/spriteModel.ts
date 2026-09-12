@@ -4,6 +4,7 @@ import { ANATOMY, footPose, jointBetween, type LegName } from './gait'
 import { M, L, Q, ell, path, curve, type Prim } from './primitives'
 import { volume, softShadow, furDetail, alpha, tint } from './surfaces'
 import { buildHead, collar } from './headModel'
+import { NOTIFICATION_PAW } from './notificationPose'
 export { M, L, Q, ell, path, curve } from './primitives'
 export type { Prim, Stroke, Seg } from './primitives'
 
@@ -37,6 +38,7 @@ export interface ModelOptions {
   breath?: number
   paw?: number
   swat?: number
+  swatTarget?: { x: number; y: number }
   yawn?: number
   stretch?: number
   dance?: number
@@ -125,8 +127,8 @@ export function buildModel(sp: SpeciesDef, opts: ModelOptions): CompanionModel {
     if (front && near) {
       foot.x = lerp(foot.x, 72, opts.paw ?? 0)
       foot.y = lerp(foot.y, 75, opts.paw ?? 0)
-      foot.x = lerp(foot.x, 82, opts.swat ?? 0)
-      foot.y = lerp(foot.y, 80, opts.swat ?? 0)
+      foot.x = lerp(foot.x, (opts.swatTarget ?? NOTIFICATION_PAW).x - 1.3, opts.swat ?? 0)
+      foot.y = lerp(foot.y, (opts.swatTarget ?? NOTIFICATION_PAW).y + 1.2, opts.swat ?? 0)
     }
     foot.x = lerp(foot.x, front ? 70 : 38, sleep)
     foot.y = lerp(foot.y, 89, sleep)
@@ -271,8 +273,8 @@ export function buildModel(sp: SpeciesDef, opts: ModelOptions): CompanionModel {
     }
     hand.x = lerp(hand.x, 77, opts.paw ?? 0)
     hand.y = lerp(hand.y, by - 4, opts.paw ?? 0)
-    hand.x = lerp(hand.x, 82, opts.swat ?? 0)
-    hand.y = lerp(hand.y, 80, opts.swat ?? 0)
+    hand.x = lerp(hand.x, (opts.swatTarget ?? NOTIFICATION_PAW).x - 1.3, opts.swat ?? 0)
+    hand.y = lerp(hand.y, (opts.swatTarget ?? NOTIFICATION_PAW).y + 1.2, opts.swat ?? 0)
     parts.push({
       id: 'legNearFront',
       prims: limb(

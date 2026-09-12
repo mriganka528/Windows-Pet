@@ -1,5 +1,19 @@
 import { describe, it, expect } from 'vitest'
-import { screenRectToLocalRect, rectCenter, type ScreenRect } from './coords'
+import {
+  screenPointToLocalPoint,
+  screenRectToLocalRect,
+  rectCenter,
+  type ScreenRect
+} from './coords'
+
+it.each([1, 1.25, 1.5, 2])(
+  'maps a measured cross to overlay coordinates at %s DPI scale',
+  (scale) => {
+    expect(
+      screenPointToLocalPoint({ x: 960 * scale, y: 420 * scale }, { x: 100, y: 20 }, scale)
+    ).toEqual({ x: 860, y: 400 })
+  }
+)
 
 describe('screenRectToLocalRect', () => {
   it('is identity at scale 1 with a zero origin (primary display, no scaling)', () => {

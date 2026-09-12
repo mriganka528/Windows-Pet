@@ -10,6 +10,7 @@ import { ANATOMY } from './gait'
 import { primitiveBounds } from './surfaces'
 import { furPattern } from './furTexture'
 import { initialActivity, stepActivity, actionProgress } from './activity'
+import { SWAT_DURATION } from './notificationPose'
 
 export interface SpriteCanvasProps {
   size: number
@@ -31,6 +32,9 @@ export interface SpriteCanvasProps {
   still?: boolean
   gesturing?: boolean
   swatNonce?: number
+  swatting?: boolean
+  swatTarget?: { x: number; y: number }
+  onSwatContact?: (nonce: number) => void
   dancing?: boolean
   beatNonce?: number
   danceTempo?: number
@@ -77,6 +81,7 @@ export function SpriteCanvas(props: SpriteCanvasProps): React.JSX.Element {
     let hopAt = -10
     let beatAt = -10
     let lastSwat = propsRef.current.swatNonce ?? 0
+    let contactSentFor = lastSwat
     let lastHop = propsRef.current.hopNonce ?? 0
     let lastBeat = propsRef.current.beatNonce ?? 0
     let lastExpression = propsRef.current.expression
@@ -149,7 +154,13 @@ export function SpriteCanvas(props: SpriteCanvasProps): React.JSX.Element {
         const age = now - start
         return age >= 0 && age < duration ? Math.sin((age / duration) * Math.PI) : 0
       }
-      const swat = oneShot(swatAt, 0.5) * (1 - sleep)
+      if (!p.swatting) swatAt = -10
+      const atContact =
+        !!p.swatting && contactSentFor !== lastSwat && now - swatAt >= SWAT_DURATION / 2
+      // Paint an exact contact frame before emitting dismissal. A separate wall
+      // clock timer can fire before the animation reaches the button on a busy PC.
+      const swat = p.swatting ? (atContact ? 1 : oneShot(swatAt, SWAT_DURATION)) * (1 - sleep) : 0
+      const exactSwat = !!p.swatting && swat > 0
       const greeting = oneShot(hopAt, 0.6) * (1 - sleep) * motion
       const beat = oneShot(beatAt, 0.24) * dance * motion
       activity = stepActivity(activity, dt, {
@@ -182,6 +193,7 @@ export function SpriteCanvas(props: SpriteCanvasProps): React.JSX.Element {
           breath,
           paw,
           swat,
+          swatTarget: p.swatTarget,
           dance: dance * motion,
           dancePhase: danceClock,
           stretch: action === 'stretch' ? envelope * motion : 0,
@@ -225,10 +237,11 @@ export function SpriteCanvas(props: SpriteCanvasProps): React.JSX.Element {
         ctx.globalAlpha *= part.opacity ?? 1
         if (part.id !== 'shadow') {
           ctx.translate(50, 91)
-          ctx.scale(turnWidth, 1 + beat * 0.025)
-          ctx.rotate(tilt)
-          ctx.translate(-50, -91 + bob)
-          if (faceExpression === 'angry') ctx.translate(Math.sin(now * 18) * 0.45 * motion, 0)
+          ctx.scale(exactSwat ? 1 : turnWidth, exactSwat ? 1 : 1 + beat * 0.025)
+          ctx.rotate(exactSwat ? 0 : tilt)
+          ctx.translate(-50, -91 + (exactSwat ? 0 : bob))
+          if (faceExpression === 'angry' && !exactSwat)
+            ctx.translate(Math.sin(now * 18) * 0.45 * motion, 0)
           if (p.dragging) ctx.translate(0, -2)
           if (part.anchor) {
             let rotation = 0
@@ -274,6 +287,7 @@ export function SpriteCanvas(props: SpriteCanvasProps): React.JSX.Element {
                 Math.sin(phase * TAU) * 0.06 * movement +
                 dance * Math.sin(danceClock) * 0.13 * motion
             rotation += part.rotation ?? 0
+            if (exactSwat && part.id === 'wing') rotation = 0
             ctx.translate(part.anchor.x, part.anchor.y)
             ctx.rotate(rotation)
             ctx.translate(-part.anchor.x, -part.anchor.y)
@@ -288,6 +302,10 @@ export function SpriteCanvas(props: SpriteCanvasProps): React.JSX.Element {
         ctx.restore()
       }
       ctx.restore()
+      if (atContact) {
+        contactSentFor = lastSwat
+        p.onSwatContact?.(lastSwat)
+      }
       if (!p.still) raf = requestAnimationFrame(draw)
     }
     raf = requestAnimationFrame(draw)
