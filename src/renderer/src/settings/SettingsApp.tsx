@@ -253,6 +253,11 @@ export default function SettingsApp(): React.JSX.Element {
       </Section>
 
       <Section title="Behavior" description="What Nudge does when a notification appears.">
+        <p className="control-help">
+          Auto-close needs visible notification banners. If Windows enables Do not disturb (Focus
+          assist on Windows 10), turn it off in Windows Settings. You can reopen the full guide from
+          the paw in your system tray → Notification setup.
+        </p>
         <div className="mode-cards">
           <ModeCard
             active={behavior.mode === 'nudge'}

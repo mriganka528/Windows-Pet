@@ -49,6 +49,15 @@ export interface OverlayGeometry {
 }
 
 const api = {
+  dismissNotificationSetup(): void {
+    ipcRenderer.send('notification-setup:dismiss')
+  },
+  openNotificationSetupSettings(): void {
+    ipcRenderer.send('notification-setup:open-app-settings')
+  },
+  openWindowsNotificationSettings(): Promise<boolean> {
+    return ipcRenderer.invoke('notification-setup:open-windows-settings')
+  },
   setAudioMonitoring(enabled: boolean): void {
     ipcRenderer.send('audio:set-monitoring', enabled)
   },

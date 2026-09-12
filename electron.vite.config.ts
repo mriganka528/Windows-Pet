@@ -47,7 +47,8 @@ export default defineConfig({
           // Second renderer entry: the Settings window (opened from the tray).
           // Emitting it here produces out/renderer/settings.html alongside
           // index.html; in dev it's served at /settings.html.
-          settings: resolve(__dirname, 'src/renderer/settings.html')
+          settings: resolve(__dirname, 'src/renderer/settings.html'),
+          notificationSetup: resolve(__dirname, 'src/renderer/notification-setup.html')
         }
       }
     }

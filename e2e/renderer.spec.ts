@@ -64,6 +64,11 @@ async function boot(page: Page, paused = false): Promise<void> {
           }
       }
       const api: NudgeApi = {
+        dismissNotificationSetup() {},
+        openNotificationSetupSettings() {},
+        async openWindowsNotificationSettings() {
+          return true
+        },
         setAudioMonitoring(enabled) {
           window.testNudge.audioEnabled = enabled
         },

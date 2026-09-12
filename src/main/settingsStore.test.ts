@@ -15,7 +15,13 @@ vi.mock('electron-store', () => ({
     }
   }
 }))
-import { initSettings, updateSettings } from './settingsStore'
+import {
+  initSettings,
+  updateSettings,
+  resetSettings,
+  hasSeenNotificationSetupNotice,
+  markNotificationSetupNoticeSeen
+} from './settingsStore'
 
 describe('capture-free audio default migration', () => {
   beforeEach(() => {
@@ -40,5 +46,41 @@ describe('capture-free audio default migration', () => {
     initSettings()
     updateSettings({ general: { reactToAudio: false } })
     expect(initSettings().general.reactToAudio).toBe(false)
+  })
+})
+
+describe('notification setup reminder', () => {
+  beforeEach(() => {
+    memory.data = {}
+  })
+
+  it('stays pending until the notice has been displayed, including after a restart', () => {
+    initSettings()
+    expect(hasSeenNotificationSetupNotice()).toBe(false)
+    initSettings()
+    expect(hasSeenNotificationSetupNotice()).toBe(false)
+    markNotificationSetupNoticeSeen()
+    initSettings()
+    expect(hasSeenNotificationSetupNotice()).toBe(true)
+  })
+
+  it('shows once for an existing profile without changing its preferences', () => {
+    const settings = mergeSettings(DEFAULT_SETTINGS, {
+      appearance: { character: 'fox' },
+      behavior: { mode: 'autoClose' }
+    })
+    memory.data = { settings, migrations: { audioMeterDefault: true } }
+    expect(initSettings()).toEqual(settings)
+    expect(hasSeenNotificationSetupNotice()).toBe(false)
+    markNotificationSetupNoticeSeen()
+    expect(initSettings()).toEqual(settings)
+    expect(hasSeenNotificationSetupNotice()).toBe(true)
+  })
+
+  it('does not repeat the first-launch tip when appearance preferences are reset', () => {
+    initSettings()
+    markNotificationSetupNoticeSeen()
+    resetSettings()
+    expect(hasSeenNotificationSetupNotice()).toBe(true)
   })
 })

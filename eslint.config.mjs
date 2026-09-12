@@ -8,7 +8,19 @@ import globals from 'globals'
 // "type": "module" — the app's main/preload build as CommonJS, but tooling
 // config can still be ESM via the .mjs extension.
 export default tseslint.config(
-  { ignores: ['out/**', 'dist/**', 'node_modules/**', 'playwright-report/**', 'test-results/**', 'coverage/**'] },
+  {
+    ignores: [
+      'out/**',
+      'dist/**',
+      'node_modules/**',
+      'playwright-report/**',
+      'test-results/**',
+      'coverage/**',
+      'Product website/dist/**',
+      'Product website/.cache/**',
+      'Product website/node_modules/**'
+    ]
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
@@ -21,7 +33,7 @@ export default tseslint.config(
     }
   },
   {
-    files: ['src/renderer/**/*.{ts,tsx}'],
+    files: ['src/renderer/**/*.{ts,tsx}', 'Product website/src/**/*.{ts,tsx}'],
     ...react.configs.flat.recommended,
     plugins: {
       react,
@@ -36,7 +48,10 @@ export default tseslint.config(
   },
   {
     rules: {
-      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }]
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }
+      ]
     }
   }
 )

@@ -26,6 +26,7 @@ import {
 
 type StoreSchema = {
   settings: NudgeSettings
+  notificationSetupNoticeSeen?: boolean
   // One-time migration flags, keyed by name. A flag is absent on any store written
   // before that migration shipped — which is exactly how we detect "not yet run".
   migrations?: Record<string, boolean>
@@ -63,6 +64,15 @@ export function initSettings(): NudgeSettings {
 /** The current in-memory settings (always fully populated). */
 export function getSettings(): NudgeSettings {
   return current
+}
+
+/** Mark only after the setup window has actually appeared. */
+export function hasSeenNotificationSetupNotice(): boolean {
+  return store?.get('notificationSetupNoticeSeen') === true
+}
+
+export function markNotificationSetupNoticeSeen(): void {
+  store?.set('notificationSetupNoticeSeen', true)
 }
 
 /**

@@ -10,7 +10,7 @@ export default defineConfig({
     { name: 'electron', testMatch: 'overlay.spec.ts' },
     {
       name: 'renderer',
-      testMatch: 'renderer.spec.ts',
+      testMatch: ['renderer.spec.ts', 'notification-setup.spec.ts'],
       use: {
         browserName: 'chromium',
         channel: 'chrome',

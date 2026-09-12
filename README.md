@@ -11,7 +11,14 @@ Preview the redesigned [animal roster](art-preview/storybook-roster.png) and
 
 To create an installer other people can use, follow [the Windows installer guide](INSTALLER.md).
 Run `npm.cmd run dist:win` on your Windows build machine; the expected output is
-`dist/Nudge-Setup-0.1.0-x64.exe`.
+`dist/Nudge-Setup-0.1.1-x64.exe`.
+
+The first installed launch shows a short notification setup tip. It explains
+that Windows **Do not disturb** (Windows 10 **Focus assist**) can hide banners,
+and should be turned off if you want the pet to interact with them. Choose
+**Settings → Behavior → Close them for me** for Auto-close. The tip closes after
+25 seconds, pauses while you interact, and can be dismissed immediately. Reopen
+it from the system tray's **Notification setup…** menu.
 
 ---
 

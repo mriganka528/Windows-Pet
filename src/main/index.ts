@@ -20,6 +20,7 @@ import {
 import { WebcamWatcher } from './webcamWatcher'
 import { SystemAudioMonitor } from './systemAudio'
 import { NotificationForeground } from './notificationForeground'
+import { NotificationSetupNotice } from './notificationSetupNotice'
 import { screenPointToLocalPoint, screenRectToLocalRect } from '../shared/coords'
 import { MOOD_ORDER, MOOD_LABELS } from '../shared/settings'
 import type { NudgeSettings, SettingsPatch, MoodDefault } from '../shared/settings'
@@ -65,6 +66,7 @@ let audioRequested = false
 // disk. (Note: MAIN_WINDOW_VITE_DEV_SERVER_URL is an electron-FORGE convention
 // and does NOT exist here — referencing it would throw at runtime.)
 const RENDERER_DEV_URL = app.isPackaged ? undefined : process.env['ELECTRON_RENDERER_URL']
+const notificationSetupNotice = new NotificationSetupNotice(createSettingsWindow, RENDERER_DEV_URL)
 
 function overlayGeometry(): {
   width: number
@@ -321,6 +323,7 @@ function buildTrayMenu(): Menu {
       label: 'Settings…',
       click: () => createSettingsWindow()
     },
+    { label: 'Notification setup…', click: () => notificationSetupNotice.show() },
     { type: 'separator' },
     {
       label: 'Quit Nudge',
@@ -680,6 +683,7 @@ if (!gotLock) {
     // Start watching for real toasts (Phase 5). Safe if the watcher is absent —
     // it just reports "unavailable" and the companion stays wander-only.
     startNotificationWatcher()
+    notificationSetupNotice.showOnce()
 
     app.on('activate', () => {
       if (!overlayWindow) createOverlayWindow()
@@ -688,6 +692,7 @@ if (!gotLock) {
 
   // Release global shortcuts, stop the watcher, and tear down the tray on exit.
   app.on('will-quit', () => {
+    notificationSetupNotice.dispose()
     notificationForeground.stop()
     globalShortcut.unregisterAll()
     // Cancel any outstanding [DEV ONLY] simulated-toast retract timers.
