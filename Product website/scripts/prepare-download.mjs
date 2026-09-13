@@ -79,18 +79,15 @@ export async function prepareDownload({
     if (!info.isFile() || info.size < 1024 * 1024)
       throw new Error('The local installer is incomplete.')
     const sha256 = await digest(installer)
-    // Keep GitHub release URLs aligned when preparing a newly versioned installer.
-    const github = previous?.downloadUrl?.match(
-      /^https:\/\/github\.com\/([^/]+\/[^/]+)\/releases\/download\//
-    )
+    // GitHub release tags need not match the app version. Preserve the supplied
+    // URL for this installer; a new release needs its own confirmed asset URL.
     metadata = {
       version,
       fileName,
       bytes: info.size,
       sha256,
-      downloadUrl: github
-        ? `https://github.com/${github[1]}/releases/download/v${version}/${fileName}`
-        : previous?.version === version
+      downloadUrl:
+        previous?.version === version && previous.fileName === fileName
           ? (previous.downloadUrl ?? null)
           : null
     }

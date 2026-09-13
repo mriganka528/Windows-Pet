@@ -37,14 +37,14 @@ that esbuild version. No interactive `npm approve-scripts` step is needed in CI.
 The site is configured for this direct release-asset URL:
 
 ```text
-https://github.com/mriganka528/Windows-Pet/releases/download/v0.1.1/Nudge-Setup-0.1.1-x64.exe
+https://github.com/mriganka528/Windows-Pet/releases/download/Nudge-Setup/Nudge-Setup-0.1.1-x64.exe
 ```
 
-The URL is configured; uploading and publishing the asset is a separate step.
-It was not uploaded or verified remotely from this environment.
+This is the download URL supplied by the publisher. Its release tag is
+**`Nudge-Setup`**, which is separate from the application version **`0.1.1`**.
 
 1. Open [Windows-Pet releases](https://github.com/mriganka528/Windows-Pet/releases)
-   and create or edit a release tagged **`v0.1.1`**.
+   and open the release tagged **`Nudge-Setup`**.
 2. Attach **`D:\Windows Pet\dist\Nudge-Setup-0.1.1-x64.exe`** to the release.
    Keep that exact filename. You can also attach
    `Product website/public/downloads/SHA256SUMS.txt`.
@@ -61,6 +61,9 @@ a different host or URL, add **`NUDGE_DOWNLOAD_URL`** in Vercel's environment
 variables for the applicable environments and redeploy. This is a public URL,
 not a credential or token. It updates all download buttons and the fallback link
 for visitors who have JavaScript disabled.
+
+An existing `NUDGE_DOWNLOAD_URL` takes precedence over `release.json`. If it
+contains the old link, update it to the URL above or remove it, then redeploy.
 
 ## Open the site locally
 
@@ -111,9 +114,10 @@ chosen domain, and add a canonical URL for that domain if desired.
 1. Update and build the Windows app in the parent project with
    `npm.cmd run dist:win`.
 2. Run `npm.cmd run build` in this folder.
-3. Commit the updated `release.json` and publish the matching GitHub release
-   and installer asset. GitHub URLs are updated to `v<version>` automatically
-   when you prepare a new local installer; verify the tag and filename match.
+3. Publish the installer asset and put its exact public download URL in
+   `release.json`, then commit the updated metadata. Rebuilding the same version
+   preserves your supplied URL. A new version clears it so an older installer
+   cannot be linked accidentally; release tags are never guessed from versions.
 4. Push the changes so Vercel can rebuild the website.
 
 The local preparation script reads the built installer, copies it into

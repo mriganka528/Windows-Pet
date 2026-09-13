@@ -17,7 +17,7 @@ const metadata = {
   fileName,
   bytes: payload.length,
   sha256: createHash('sha256').update(payload).digest('hex').toUpperCase(),
-  downloadUrl: `https://github.com/mriganka528/Windows-Pet/releases/download/v${version}/${fileName}`
+  downloadUrl: `https://github.com/mriganka528/Windows-Pet/releases/download/Nudge-Setup/${fileName}`
 }
 
 async function fixture(t) {
@@ -44,7 +44,7 @@ test('Vercel can build from a checkout with no Windows installer or build output
   assert.equal(JSON.parse(await readFile(join(site, 'src/release.json'), 'utf8')).version, version)
 })
 
-test('local packaging still copies the exact installer and writes its release metadata', async (t) => {
+test('local packaging preserves the supplied release tag and copies the exact installer', async (t) => {
   const { root, site } = await fixture(t)
   await mkdir(join(root, 'dist'))
   await writeFile(join(root, 'dist', fileName), payload)
