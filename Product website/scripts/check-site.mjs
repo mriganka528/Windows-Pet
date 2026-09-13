@@ -163,24 +163,30 @@ try {
   }
   record('All screenshots load and every gallery image expands')
 
-  const [download] = await Promise.all([
-    page.waitForEvent('download'),
-    page.locator('.hero-actions').getByRole('link', { name: 'Download for Windows' }).click()
-  ])
-  assert.equal(download.suggestedFilename(), release.fileName)
-  assert.equal(await download.failure(), null)
-  const hash = createHash('sha256')
-  for await (const chunk of createReadStream(await download.path())) hash.update(chunk)
-  assert.equal(hash.digest('hex').toUpperCase(), release.sha256)
+  if (release.downloadMode === 'local') {
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.locator('.hero-actions').getByRole('link', { name: 'Download for Windows' }).click()
+    ])
+    assert.equal(download.suggestedFilename(), release.fileName)
+    assert.equal(await download.failure(), null)
+    const hash = createHash('sha256')
+    for await (const chunk of createReadStream(await download.path())) hash.update(chunk)
+    assert.equal(hash.digest('hex').toUpperCase(), release.sha256)
+    record(`Browser download completes and matches the actual ${release.size} installer SHA-256`)
+  } else {
+    // The public asset must be uploaded separately; this offline check cannot
+    // certify that GitHub has published it or verify its remote contents.
+    record('External installer URL is configured (remote asset availability not checked)')
+  }
   const checksum = await (await fetch(`${base}/downloads/SHA256SUMS.txt`)).text()
   assert.match(checksum, new RegExp(release.sha256))
   for (const link of await page.locator('a[download$=".exe"]').all()) {
-    assert.match(
-      await link.getAttribute('href'),
-      new RegExp(release.fileName.replaceAll('.', '\\.'))
+    assert.equal(
+      await link.evaluate((element) => element.href),
+      new URL(release.downloadUrl, base + '/').href
     )
   }
-  record(`Browser download completes and matches the actual ${release.size} installer SHA-256`)
 
   const brokenAnchors = await page.evaluate(() =>
     [...document.querySelectorAll('a[href^="#"]')]
@@ -219,9 +225,9 @@ try {
   const fallback = await noJS.newPage()
   await fallback.goto(base)
   await fallback.getByRole('heading', { name: 'Meet Nudge.' }).waitFor()
-  assert.match(
-    await fallback.getByRole('link').getAttribute('href'),
-    new RegExp(release.fileName.replaceAll('.', '\\.'))
+  assert.equal(
+    await fallback.getByRole('link').evaluate((element) => element.href),
+    new URL(release.downloadUrl, base + '/').href
   )
   await noJS.close()
   record('Download fallback works with JavaScript disabled')

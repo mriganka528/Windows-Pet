@@ -11,6 +11,11 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "esModuleInterop": true,
+    "baseUrl": ".",
+    "paths": {
+      "react": ["./node_modules/@types/react", "../node_modules/@types/react"],
+      "react/*": ["./node_modules/@types/react/*", "../node_modules/@types/react/*"]
+    },
     "types": ["vite/client"],
     "noEmit": true
   },

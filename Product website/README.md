@@ -4,7 +4,65 @@ A complete, responsive product site for Nudge, with the app's actual animated
 characters, real settings screenshots, interactive previews, guides, and the
 Windows installer download.
 
-## Open the site
+## Deploy to Vercel
+
+Use the Git repository as the deployment source, with these project settings:
+
+| Setting                                            | Value                  |
+| -------------------------------------------------- | ---------------------- |
+| Root Directory                                     | `Product website`      |
+| Include source files outside of the Root Directory | **Enabled**            |
+| Framework Preset                                   | **Vite**               |
+| Install Command                                    | `npm ci`               |
+| Build Command                                      | `npm run build:vercel` |
+| Output Directory                                   | `dist`                 |
+
+`vercel.json` supplies the framework and commands. Set the root directory and
+outside-source checkbox in Vercel. The checkbox is required because the site
+imports the pet renderer from `../src`; the Windows app itself is not installed
+or built on Vercel. The website's own lockfile and React resolution settings
+support installing only this folder's dependencies.
+
+Commit and push the updated website files, including `package-lock.json`,
+`release.json`, and `vercel.json`, before redeploying. Vercel cannot see changes
+that exist only on your computer. If you previously configured different build
+overrides in Vercel, change them to the values above.
+
+The npm `allow-scripts` message was advisory, not the cause of the failed build.
+`package.json` now permits the reviewed `esbuild@0.21.5` install script and pins
+that esbuild version. No interactive `npm approve-scripts` step is needed in CI.
+
+## Publish the Windows download on GitHub
+
+The site is configured for this direct release-asset URL:
+
+```text
+https://github.com/mriganka528/Windows-Pet/releases/download/v0.1.1/Nudge-Setup-0.1.1-x64.exe
+```
+
+The URL is configured; uploading and publishing the asset is a separate step.
+It was not uploaded or verified remotely from this environment.
+
+1. Open [Windows-Pet releases](https://github.com/mriganka528/Windows-Pet/releases)
+   and create or edit a release tagged **`v0.1.1`**.
+2. Attach **`D:\Windows Pet\dist\Nudge-Setup-0.1.1-x64.exe`** to the release.
+   Keep that exact filename. You can also attach
+   `Product website/public/downloads/SHA256SUMS.txt`.
+3. Publish the release. Check that its EXE downloads in a signed-out browser.
+4. Push the website changes and deploy with the Vercel settings above.
+
+Do not add the 135 MB EXE to Git source files. Release assets are uploaded through
+the release page. The release must be publicly downloadable; if your source
+repository is private, use a separate public downloads repository and set the
+site's `NUDGE_DOWNLOAD_URL` environment variable to that asset's direct HTTPS URL.
+
+No environment variable is needed for the configured repository and tag. To use
+a different host or URL, add **`NUDGE_DOWNLOAD_URL`** in Vercel's environment
+variables for the applicable environments and redeploy. This is a public URL,
+not a credential or token. It updates all download buttons and the fallback link
+for visitors who have JavaScript disabled.
+
+## Open the site locally
 
 From `D:\Windows Pet\Product website`:
 
@@ -15,12 +73,12 @@ npm.cmd run dev
 Open **http://127.0.0.1:4176**. You can also double-click `Start website.cmd`.
 Keep the terminal open while viewing the site. Press Ctrl+C to stop the server.
 
-The website uses the dependencies already installed in the parent Nudge project.
-If setting up a new checkout, run `npm.cmd ci` in the parent folder first.
+Install this website's dependencies with `npm.cmd ci` in this folder. Existing
+development checkouts can also use the dependencies in the parent Nudge project.
 Keep the source folder inside the Nudge project: the live pets deliberately
 import the same character renderer and settings definitions as the app.
 
-## Build a website you can host
+## Local and cloud builds
 
 ```powershell
 npm.cmd run build
@@ -28,17 +86,23 @@ npm.cmd run preview
 ```
 
 The **`Product website/dist`** folder is the complete, independent website.
-Upload **all of its contents**, including `downloads`, `images`, and `assets`, to
-a static web host. No Node server, API, database, accounts, or environment secrets
-are needed in production. Asset paths also support hosting under a subdirectory.
-The source files are not the deployable website; use the built `dist` folder.
+With a local EXE present, `npm run build` bundles it for folder-based sharing.
+On a clean checkout without the EXE, it uses the external release URL instead.
+`npm run build:vercel` (or the `VERCEL=1` environment) always uses the external
+URL and excludes generated EXE copies from the website, even on Windows.
 
-The installer is about **135 MB**. Choose a host that accepts files of that size.
-If your host has a smaller file limit, put the installer on your own release or
-file host, then change `downloadUrl` in `src/main.tsx` and the no-JavaScript
-download link in `index.html` to its public URL before rebuilding.
+Cloud builds read the committed **`release.json`** for the version, filename,
+size, SHA-256 checksum, and GitHub URL. They need no EXE, .NET SDK, or Electron
+runtime. `src/release.json` is generated for the UI and remains ignored by Git.
+A mismatch between the app version and release metadata stops the build with
+instructions to update the metadata, so an old checksum cannot label a new file.
 
-No deployment or public upload has been performed. Before publishing, replace
+For manual static hosting, upload all contents of the built `dist` folder. Use
+the cloud build when hosting the installer on GitHub. No Node server, API,
+database, or account system is needed in production. Relative assets support
+hosting under a subdirectory.
+
+Before publishing, replace
 the relative Open Graph image URL in `index.html` with the absolute URL on your
 chosen domain, and add a canonical URL for that domain if desired.
 
@@ -47,11 +111,15 @@ chosen domain, and add a canonical URL for that domain if desired.
 1. Update and build the Windows app in the parent project with
    `npm.cmd run dist:win`.
 2. Run `npm.cmd run build` in this folder.
+3. Commit the updated `release.json` and publish the matching GitHub release
+   and installer asset. GitHub URLs are updated to `v<version>` automatically
+   when you prepare a new local installer; verify the tag and filename match.
+4. Push the changes so Vercel can rebuild the website.
 
-The preparation script reads the app version from the parent's `package.json`,
-copies `dist/Nudge-Setup-<version>-x64.exe` into `public/downloads`, and generates
-the visible version, file size, and SHA-256 checksum. It refuses to build if the
-installer is missing. It does not upload the installer anywhere.
+The local preparation script reads the built installer, copies it into
+`public/downloads`, and computes the release size and checksum. The cloud path
+uses the committed metadata and links directly to GitHub. Neither path uploads
+files to GitHub or deploys the website.
 
 The website download directory keeps the current installer only. Earlier app
 installers remain in the parent project's `dist` folder. The download area,
@@ -97,15 +165,21 @@ audio, or cameras. The Windows app is still required for those real features.
 
 ```powershell
 npm.cmd run build
+npm.cmd run test:build
 npm.cmd run check
 ```
 
 The checks start a temporary local preview on port 4177, use Chrome to exercise
 the preview, animal/coat/mood choices, keyboard navigation, guides, gallery,
-dialogs, and mobile menu, then download the installer and verify its SHA-256.
+dialogs, and mobile menu. For a local build they download the installer and verify
+its SHA-256. For a cloud build they check that the links match the configured
+external URL; they do not fetch or certify the remote release asset.
 They also check JavaScript errors, missing images, horizontal overflow at six
 screen widths, and the download fallback without JavaScript. The temporary
 preview and browser close afterwards.
+
+`test:build` covers the original Vercel failure (no local EXE), local packaging,
+cloud exclusion of binaries, URL overrides, and stale or invalid release data.
 
 Reports and full-page screenshots are in `.cache/` (ignored by Git). The normal
 development server on port 4176 is separate from the verification server.
@@ -120,4 +194,6 @@ development server on port 4176 is separate from the verification server.
 | `src/content.ts`               | Companion descriptions, guides, and FAQs               |
 | `src/styles.css`               | Responsive visual design and reduced motion styles     |
 | `scripts/prepare-download.mjs` | Installer copy and release metadata                    |
+| `release.json`                 | Committed release metadata and public GitHub asset URL |
+| `vercel.json`                  | Cloud build and output settings                        |
 | `public/images`                | Product screenshots and social preview                 |

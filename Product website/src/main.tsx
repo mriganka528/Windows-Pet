@@ -14,7 +14,8 @@ import release from './release.json'
 import './styles.css'
 
 const asset = (path: string) => `${import.meta.env.BASE_URL}${path}`
-const downloadUrl = asset(`downloads/${release.fileName}`)
+const downloadUrl =
+  release.downloadMode === 'local' ? asset(release.downloadUrl) : release.downloadUrl
 type ModalState =
   | { type: 'privacy' | 'release' | 'checksum' }
   | { type: 'image'; src: string; title: string; caption: string }
@@ -173,8 +174,8 @@ function SiteModal({ content, onClose }: { content: ModalState; onClose: () => v
               Version {release.version} · Windows x64 · {release.size}
             </p>
             <p>
-              The SHA-256 checksum identifies the exact installer included with this site. Compare
-              it with your downloaded file before opening it.
+              The SHA-256 checksum identifies the exact Nudge installer for this release. Compare it
+              with your downloaded file before opening it.
             </p>
             <label className="hash-label" htmlFor="checksum">
               SHA-256
